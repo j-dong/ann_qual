@@ -1,0 +1,8 @@
+*.swp
+*~
+/deps/
+/objs/
+*.exe
+/test
+/plat.mk
+*.dll
