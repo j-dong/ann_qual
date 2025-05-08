@@ -7,15 +7,18 @@ OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
 CXXFLAGS := -O3 -std=c++20 -g -march=znver2
-CPPFLAGS := -I"$(HOME)/Downloads/Tools/blis-5.0/include/zen2"
-LDFLAGS := -g -L"$(HOME)/Downloads/Tools/blis-5.0/lib/zen2"
-LIBS := -lblis
+CPPFLAGS :=
+LDFLAGS := -g
 
 ifeq ($(PLATFORM),win32)
 	EXESUFF := .exe
 	EXTRA_OBJS := plat_win32/manifest.o
+	CPPFLAGS += -I"$(HOME)/Downloads/Tools/blis-5.0/include/zen2"
+	LDFLAGS += -L"$(HOME)/Downloads/Tools/blis-5.0/lib/zen2"
+	LIBS := -lblis
 else
 	EXESUFF :=
+	LIBS := -lblas
 endif
 
 test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/timer.o objs/kernel_utils.o $(EXTRA_OBJS)

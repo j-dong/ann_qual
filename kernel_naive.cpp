@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <cstring>
 
 namespace {
 class NaiveIndex : public Index {

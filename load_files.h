@@ -2,12 +2,12 @@
 
 struct RawVectorData {
     void *filestart;
-    size_t filesize;
+    std::size_t filesize;
     float *vec;
     inline float &at(int i, int j) { return vec[1 + j + i * stride()]; }
     int dim;
     inline int stride() const { return dim + 1; }
-    size_t length;
+    std::size_t length;
 };
 
 struct IntVectorData {

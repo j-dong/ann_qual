@@ -30,6 +30,7 @@ static void unmap_file(FileMappingData *data);
 
 struct FileMappingData {
     void *mapping_ptr;
+    size_t length;
 };
 
 static void *map_file(const char *fname, FileMappingData *data, size_t *filesize);
