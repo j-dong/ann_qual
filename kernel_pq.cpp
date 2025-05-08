@@ -249,6 +249,9 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 nullptr,
                 nullptr
             );
+            for (int k = 0; k < 20 && i < 10; k++) {
+                std::cout << "d" << i << "[" << k << "] -> #" << sub_assignments[k] << std::endl;
+            }
             write_assignments(
                 vectors->length,
                 sub_assignments.get(),
@@ -258,6 +261,14 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 i,
                 ret->clustered_quant.get()
             );
+        }
+        // print the first codebook
+        for (int i = 0; i < subcodebook_size; i++) {
+            std::cout << "codebook1[" << i << "] =";
+            for (int j = 0; j < group_dim; j++) {
+                std::cout << " " << ret->get_codebook(0)[j + i * group_dim];
+            }
+            std::cout << "\n";
         }
         int cc = 0;
         double total_err = 0.0;
