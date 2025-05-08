@@ -746,7 +746,7 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
             iprod += iprods[j * subcodebook_size + q];
         }
         out[i].iprod = iprod + idx->bias[start + i];
-        if (i % 10 == 0 && (i % 1000000 < 500)) {
+        if (query == data_query.vec + 1 && i % 10 == 0 && (i % 1000000 < 500)) {
             float actual_iprod = cblas_sdot(
                 idx->dim,
                 query,
@@ -754,7 +754,7 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
                 &data_base.at(i, 0),
                 1
             );
-            std::cout << "pt " << i << " -> estimated iprod = "
+            std::cout << "pt " << out[i].index << "(" << i << ")" << " -> estimated iprod = "
                 << iprod << ", actual iprod = "
                 << actual_iprod << std::endl;
         }
