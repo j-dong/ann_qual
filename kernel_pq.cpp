@@ -19,6 +19,12 @@ template<class T>
 using box = std::unique_ptr<T>;
 
 namespace {
+struct aligned_deleter {
+    void operator()(char *p) {
+        ::operator delete[](p, std::align_val_t(64));
+    }
+};
+
 struct PQIndex : public Index {
     bool is_l2;
     int dim;
@@ -41,7 +47,7 @@ struct PQIndex : public Index {
     // value size is ceil(fine_bits / 8) bytes
     // each vector is padded to at least 64 bytes
     // to minimize false sharing
-    box<char[]> clustered_quant;
+    std::unique_ptr<char[], aligned_deleter> clustered_quant;
 
     float *get_codebook(int i) {
         int group_dim = (dim + num_groups - 1) / num_groups;
@@ -213,7 +219,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         box<int[]> sub_assignments = std::make_unique<int[]>(vectors->length);
         int group_size = byte_size(ret->fine_bits);
         int qvec_size = roundup_line(group_size * ret->num_groups);
-        ret->clustered_quant = std::unique_ptr<char[]>(
+        ret->clustered_quant = std::unique_ptr<char[], aligned_deleter>(
             new (std::align_val_t(64)) char[qvec_size * vectors->length]
         );
         box<float[]> qerr = std::make_unique<float[]>(vectors->length);
@@ -521,7 +527,7 @@ void compute_k_means(int num_clusters, int dim, int stride, int num_vectors, flo
                 continue;
             }
             int o;
-            for (o = 0; o < num_clusters; o++) {
+            for (o = 0; true; o = (o+1) % num_clusters) {
                 float p = (clusters_size[o] - 1.0f) / (num_vectors - num_clusters);
                 float r = std::generate_canonical<float, 16>(rng);
                 if (r < p) break;
