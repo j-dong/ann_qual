@@ -1,30 +1,39 @@
 #include "load_files.h"
 
 #include "kernel_naive.h"
+#include "kernel_pq.h"
 
 #include <iostream>
 #include <vector>
 
 int main(int argc, char **argv) {
     load_files();
-    auto index = preprocess_ann_naive(
-        true, /* is_l2 */
-        data_base.dim,
-        data_base.length,
-        data_base.vec
+    auto index2 = preprocess_ann_pq(
+        true,
+        &data_base,
+        &data_learn
     );
+    // auto index = preprocess_ann_naive(
+    //     true,
+    //     &data_base,
+    //     &data_learn
+    // );
     std::vector<int> result;
     result.resize(100);
-    compute_ann_naive(
-        data_query.dim,
-        data_base.length,
+    // compute_ann_naive(
+    //     &data_base,
+    //     100,
+    //     &data_query.vec[1],
+    //     result.data(),
+    //     index.get()
+    // );
+    compute_ann_pq(
+        &data_base,
         100,
-        data_query.vec,
-        data_base.vec,
+        &data_query.vec[1],
         result.data(),
-        index
+        index2.get()
     );
-    free(index);
     for (int x : result) {
         std::cout << x << std::endl;
     }

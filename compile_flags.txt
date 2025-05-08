@@ -2,3 +2,4 @@
 C:/Program Files/AMD/AOCL-Windows/amd-blis/include/LP64
 -x
 c++
+-std=c++20

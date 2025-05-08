@@ -1,59 +1,54 @@
 #include "kernel_naive.h"
+#include "kernel_utils.h"
+#include "load_files.h"
+
 #include "cblas.h"
 
 #include <vector>
 #include <algorithm>
 
+namespace {
 class NaiveIndex : public Index {
 public:
-    float *data;
-    ~NaiveIndex() { delete[] data; }
+    std::unique_ptr<float[]> data;
+    ~NaiveIndex() {}
 };
+}
 
-Index *preprocess_ann_naive(bool is_l2, int dim, int num_vectors, float *vectors) {
-    if (!is_l2) return nullptr;
-    NaiveIndex *ret = new NaiveIndex();
-    ret->data = new float[num_vectors];
-    for (int i = 0; i < num_vectors; i++) {
-        ret->data[i] = -0.5f * cblas_sdot(
-            dim,
-            vectors + 1 + i * (dim + 1),
-            1,
-            vectors + 1 + i * (dim + 1),
-            1
-        );
-    }
+std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
+    auto ret = std::make_unique<NaiveIndex>();
+    ret->data = preprocess_l2_bias(is_l2, vectors);
     return ret;
 }
 
 void compute_ann_naive(
-    int dim,
-    int num_vectors,
+    RawVectorData *vectors,
     int k,
     float *query,
-    float *vectors,
     int *result,
     Index *index
 ) {
     std::vector<float> temp_iprods;
     std::vector<int> temp_indices;
+    int num_vectors = vectors->length;
     temp_iprods.resize(num_vectors);
-    if (index) {
-        memcpy(temp_iprods.data(), ((NaiveIndex *) index)->data, sizeof(float) * num_vectors);
-    }
+    NaiveIndex *nindex = (NaiveIndex *) index;
+    if (nindex && nindex->data) {
+        memcpy(temp_iprods.data(), nindex->data.get(), sizeof(float) * num_vectors);
+    } else { nindex = nullptr; }
     temp_indices.reserve(num_vectors);
     for (int i = 0; i < num_vectors; i++) temp_indices.push_back(i);
     cblas_sgemv(
         CblasRowMajor,
         CblasNoTrans,
         num_vectors,
-        dim,
+        vectors->dim,
         1.0f,
-        vectors + 1,
-        dim + 1,
-        query + 1,
+        vectors->vec + 1,
+        vectors->dim + 1,
+        query,
         1,
-        index ? 1.0f : 0.0f,
+        nindex ? 1.0f : 0.0f,
         &temp_iprods[0],
         1
     );
