@@ -111,7 +111,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     auto out_bias = is_l2 ? std::make_unique<float[]>(vectors->length) : nullptr;
     // ret->num_clusters = (int) std::sqrt(learn->length);
     ret->num_clusters = 8192;
-    ret->window = 8;
+    ret->window = 64;
     ret->fine_bits = 8;
     ret->num_groups = 16;
     // ret->num_clusters = 128;
