@@ -376,7 +376,8 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     int cur = 0;
     for (int i = 0; i < idx->window; i++) {
         int c = cluster_indices[i];
-        search_cluster(c, &window_results[cur], iprods[c], cb_iprods.get(), idx);
+        float iprod = iprods[c] - idx->clusters_bias[c];
+        search_cluster(c, &window_results[cur], iprod, cb_iprods.get(), idx);
         cur += idx->cluster_start[c + 1] - idx->cluster_start[c];
     }
     auto wr_begin = &window_results[0];
