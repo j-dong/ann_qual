@@ -2,6 +2,7 @@
 #include "kernel_utils.h"
 #include "load_files.h"
 #include "timer.h"
+#include "simd_utils.h"
 
 #ifndef NOMINMAX
 # define NOMINMAX 1
@@ -10,9 +11,7 @@
 
 #include <cstring>
 #include <random>
-#include <cmath>
 #include <iostream>
-#include <immintrin.h>
 #include <numeric>
 
 template<class T>
@@ -96,11 +95,10 @@ static void compute_assignments(
     float *energy,
     int *changed
 );
-static box<float[]> transform_fine_vectors(RawVectorData *vectors, int num_clusters, float *clusters, int *assignments, float *transform);
+static box<float[]> transform_fine_vectors(RawVectorData *vectors, float *clusters, int *assignments, float *transform);
 static void generate_transform(float *mat, int dim);
-static void simd_pfxsum(int *arr, int N);
 static void write_assignments(int num_vectors, int *assignments, int *gather, int bits, int num_groups, int dim_i, char *out);
-static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx, float *query);
+static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx);
 
 box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
     box<PQIndex> ret = std::make_unique<PQIndex>();
@@ -126,7 +124,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         ScopedTimer timer("train fine quantizer");
         ret->transform = std::make_unique<float[]>(dim * dim);
         generate_transform(ret->transform.get(), dim);
-        box<float[]> transformed_learn = transform_fine_vectors(learn, ret->num_clusters, ret->clusters.get(), learn_assignments.get(), ret->transform.get());
+        box<float[]> transformed_learn = transform_fine_vectors(learn, ret->clusters.get(), learn_assignments.get(), ret->transform.get());
         // ret->fine_bits = 8;
         int subcodebook_size = 1 << ret->fine_bits;
         int group_dim = (dim + ret->num_groups - 1) / ret->num_groups;
@@ -200,7 +198,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         }
         auto fine = transform_fine_vectors(
             vectors,
-            ret->num_clusters,
             ret->clusters.get(),
             assignments.get(),
             ret->transform.get()
@@ -338,7 +335,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     for (int i = 0; i < idx->window; i++) {
         int c = cluster_indices[i];
         float iprod = iprods[c] - idx->clusters_bias[c];
-        search_cluster(c, &window_results[cur], iprod, cb_iprods.get(), idx, query);
+        search_cluster(c, &window_results[cur], iprod, cb_iprods.get(), idx);
         cur += idx->cluster_start[c + 1] - idx->cluster_start[c];
     }
     auto wr_begin = &window_results[0];
@@ -346,87 +343,6 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     std::partial_sort(wr_begin, wr_begin + k, wr_end);
     for (int i = 0; i < k; i++) {
         result[i] = window_results[i].index;
-    }
-}
-
-int simd_argmax(float *vec, int dim) {
-    // found https://en.algorithmica.org/hpc/algorithms/argmin/
-    float val = -std::numeric_limits<float>::infinity();
-    int idx = 0;
-    int i = 0;
-    // prolog
-    for (; i < dim && (uintptr_t) (vec + i) % 32 != 0; i++) {
-        if (vec[i] > val) {
-            val = vec[i];
-            idx = i;
-        }
-    }
-    // vectorized
-    __m256 p = _mm256_set1_ps(val);
-
-    for (; i + 31 < dim; i += 32) {
-        __m256 y1 = _mm256_load_ps(&vec[i]);
-        __m256 y2 = _mm256_load_ps(&vec[i + 8]);
-        __m256 y3 = _mm256_load_ps(&vec[i + 16]);
-        __m256 y4 = _mm256_load_ps(&vec[i + 24]);
-        y1 = _mm256_max_ps(y1, y2);
-        y3 = _mm256_max_ps(y3, y4);
-        y1 = _mm256_max_ps(y1, y3);
-        __m256 mask = _mm256_cmp_ps(p, y1, _CMP_LT_OQ);
-        if (!_mm256_testz_ps(mask, mask)) { [[unlikely]]
-            idx = i;
-            for (int j = i; j < i + 32; j++) {
-                val = vec[j] > val ? vec[j] : val;
-            }
-            p = _mm256_set1_ps(val);
-        }
-    }
-
-    int end = idx + 32;
-    for (int j = idx; j < end && j < dim; j++) {
-        if (vec[j] == val) {
-            idx = j;
-            break;
-        }
-    }
-
-    // epilog
-    for (; i < dim; i++) {
-        if (vec[i] > val) {
-            val = vec[i];
-            idx = i;
-        }
-    }
-
-    return idx;
-}
-
-void simd_pfxsum(int *arr, int N) {
-    int sum = 0;
-    int i = 0;
-    for (; ((uintptr_t) &arr[i]) % 32; i++) {
-        sum += arr[i];
-        arr[i] = sum;
-    }
-    for (; i + 7 < N; i += 8) {
-        __m256i b = _mm256_set1_epi32(sum);
-        __m256i v = _mm256_load_si256((__m256i *) &arr[i]);
-        v = _mm256_add_epi32(v, _mm256_slli_si256(v, 4));
-        v = _mm256_add_epi32(v, _mm256_slli_si256(v, 8));
-        __m128i lo = _mm_shuffle_epi32(_mm256_castsi256_si128(v),
-                                       _MM_SHUFFLE(3, 3, 3, 3));
-        lo = _mm_add_epi32(_mm256_castsi256_si128(b), lo);
-        int sum_lo = _mm_cvtsi128_si32(lo);
-        int sum_hi = _mm256_extract_epi32(v, 7);
-        b = _mm256_inserti128_si256(b, lo, 1);
-        v = _mm256_add_epi32(v, b);
-        sum = sum_lo + sum_hi;
-        // sum = _mm256_extract_epi32(v, 7);
-        _mm256_store_si256((__m256i *) &arr[i], v);
-    }
-    for (; i < N; i++) {
-        sum += arr[i];
-        arr[i] = sum;
     }
 }
 
@@ -624,7 +540,7 @@ void compute_assignments(
     }
 }
 
-box<float[]> transform_fine_vectors(RawVectorData *vectors, int num_clusters, float *clusters, int *assignments, float *transform) {
+box<float[]> transform_fine_vectors(RawVectorData *vectors, float *clusters, int *assignments, float *transform) {
     int num_vectors = vectors->length;
     int dim = vectors->dim;
     box<float[]> ret = std::make_unique<float[]>(num_vectors * dim);
@@ -695,7 +611,7 @@ void write_assignments(int num_vectors, int *assignments, int *scatter, int bits
 }
 
 template<int G>
-void search_helper(int start, int N, WindowResult *out, int qvec_size, float cluster_iprod, float *iprods, PQIndex *idx, float *query) {
+void search_helper(int start, int N, WindowResult *out, int qvec_size, float cluster_iprod, float *iprods, PQIndex *idx) {
     int subcodebook_size = 1 << idx->fine_bits;
     for (int i = 0; i < N; i++) {
         out[i].index = idx->cluster_values[start + i];
@@ -709,19 +625,19 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
     }
 }
 
-static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx, float *query) {
+static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx) {
     int start = idx->cluster_start[c];
     int N = idx->cluster_start[c + 1] - idx->cluster_start[c];
     int group_size = byte_size(idx->fine_bits);
     int qvec_size = roundup_line(group_size * idx->num_groups);
     if (group_size == 1) {
-        search_helper<1>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
+        search_helper<1>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else if (group_size == 2) {
-        search_helper<2>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
+        search_helper<2>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else if (group_size == 4) { [[unlikely]]
-        search_helper<4>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
+        search_helper<4>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else if (group_size == 3) { [[unlikely]]
-        search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
+        search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else { [[unlikely]]
         throw std::runtime_error("invalid number of bytes to write");
     }

@@ -48,14 +48,14 @@ void load_vector(const char *fname, RawVectorData *data, FileMappingData *map) {
     data->filestart = map_file(fname, map, &data->filesize);
     data->vec = (float *) data->filestart;
     data->dim = *(int *) data->filestart;
-    data->length = data->filesize / 4 / (1 + data->dim);
+    data->length = (int) (data->filesize / 4 / (1 + data->dim));
 }
 
 void load_vector(const char *fname, IntVectorData *data, FileMappingData *map) {
     data->filestart = map_file(fname, map, &data->filesize);
     data->vec = (int *) data->filestart;
     data->dim = *(int *) data->filestart;
-    data->length = data->filesize / 4 / (1 + data->dim);
+    data->length = (int) (data->filesize / 4 / (1 + data->dim));
 }
 
 void load_files() {

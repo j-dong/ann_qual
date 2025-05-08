@@ -2,7 +2,7 @@ include plat.mk
 
 CXX ?= g++
 
-SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp timer.cpp kernel_utils.cpp
+SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp timer.cpp kernel_utils.cpp simd_utils.cpp
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
@@ -21,7 +21,7 @@ else
 	LIBS := -lblas
 endif
 
-test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/timer.o objs/kernel_utils.o $(EXTRA_OBJS)
+test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/timer.o objs/kernel_utils.o objs/simd_utils.o $(EXTRA_OBJS)
 	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
 
 objs/%.o: %.cpp

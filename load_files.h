@@ -7,7 +7,7 @@ struct RawVectorData {
     inline float &at(int i, int j) { return vec[1 + j + i * stride()]; }
     int dim;
     inline int stride() const { return dim + 1; }
-    std::size_t length;
+    int length;
 };
 
 struct IntVectorData {
@@ -17,7 +17,7 @@ struct IntVectorData {
     inline int &at(int i, int j) { return vec[1 + j + i * stride()]; }
     int dim;
     inline int stride() const { return dim + 1; }
-    std::size_t length;
+    int length;
 };
 
 extern RawVectorData data_base;

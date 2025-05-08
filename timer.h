@@ -16,8 +16,8 @@ public:
 template<>
 class ScopedTimer<false> {
 public:
-    ScopedTimer(const char *name, int index) {}
-    ScopedTimer(const char *name) {}
+    ScopedTimer([[maybe_unused]] const char *name, [[maybe_unused]] int index) {}
+    ScopedTimer([[maybe_unused]] const char *name) {}
 };
 
 template class ScopedTimer<true>;

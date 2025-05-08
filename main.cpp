@@ -8,7 +8,7 @@
 #include <vector>
 #include <algorithm>
 
-int main(int argc, char **argv) {
+int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     load_files();
     auto index2 = preprocess_ann_pq(
         true,

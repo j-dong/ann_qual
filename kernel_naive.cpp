@@ -16,7 +16,7 @@ public:
 };
 }
 
-std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
+std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, [[maybe_unused]] RawVectorData *learn) {
     auto ret = std::make_unique<NaiveIndex>();
     ret->data = preprocess_l2_bias(is_l2, vectors);
     return ret;
