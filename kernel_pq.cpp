@@ -326,6 +326,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
 void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
     PQIndex *idx = (PQIndex *) raw_index;
     auto iprods = std::make_unique<float[]>(idx->num_clusters);
+    auto query_xformed = std::make_unique<float[]>(idx->dim);
     memcpy(iprods.get(), idx->bias.get(), idx->num_clusters * sizeof(float));
     cblas_sgemv(
         CblasRowMajor,
@@ -356,6 +357,20 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
         memcpy(cb_iprods.get(), idx->codebooks_bias.get(), total_cb_size * sizeof(float));
     }
     int group_dim = (idx->dim + idx->num_groups - 1) / idx->num_groups;
+    cblas_sgemv(
+        CblasRowMajor,
+        CblasNoTrans,
+        idx->dim,
+        idx->dim,
+        1.0,
+        idx->transform.get(),
+        idx->dim,
+        query,
+        1,
+        0.0,
+        query_xformed.get(),
+        1
+    );
     for (int i = 0; i < idx->num_groups; i++) {
         int start_dim = i * group_dim;
         int cur_dim = std::min(group_dim, idx->dim - start_dim);
@@ -367,7 +382,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
             1.0f,
             idx->get_codebook(i),
             cur_dim,
-            query + start_dim,
+            &query_xformed[start_dim],
             1,
             idx->is_l2 ? 1.0f : 0.0f,
             &cb_iprods[subcodebook_size * i],
@@ -378,7 +393,8 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     int cur = 0;
     for (int i = 0; i < idx->window; i++) {
         int c = cluster_indices[i];
-        search_cluster(c, &window_results[cur], iprods[c], cb_iprods.get(), idx);
+        // search_cluster(c, &window_results[cur], iprods[c], cb_iprods.get(), idx);
+        search_cluster(c, &window_results[cur], 0.0f, cb_iprods.get(), idx);
         cur += idx->cluster_start[c + 1] - idx->cluster_start[c];
     }
     auto wr_begin = &window_results[0];
