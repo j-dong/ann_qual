@@ -100,7 +100,7 @@ static box<float[]> transform_fine_vectors(RawVectorData *vectors, int num_clust
 static void generate_transform(float *mat, int dim);
 static void simd_pfxsum(int *arr, int N);
 static void write_assignments(int num_vectors, int *assignments, int *gather, int bits, int num_groups, int dim_i, char *out);
-static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx);
+static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx, float *query);
 
 box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
     box<PQIndex> ret = std::make_unique<PQIndex>();
@@ -377,7 +377,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     for (int i = 0; i < idx->window; i++) {
         int c = cluster_indices[i];
         float iprod = iprods[c] - idx->clusters_bias[c];
-        search_cluster(c, &window_results[cur], iprod, cb_iprods.get(), idx);
+        search_cluster(c, &window_results[cur], iprod, cb_iprods.get(), idx, query);
         cur += idx->cluster_start[c + 1] - idx->cluster_start[c];
     }
     auto wr_begin = &window_results[0];
@@ -735,33 +735,45 @@ void write_assignments(int num_vectors, int *assignments, int *scatter, int bits
 }
 
 template<int G>
-void search_helper(int start, int N, WindowResult *out, int qvec_size, float cluster_iprod, float *iprods, PQIndex *idx) {
+void search_helper(int start, int N, WindowResult *out, int qvec_size, float cluster_iprod, float *iprods, PQIndex *idx, float *query) {
     int subcodebook_size = 1 << idx->fine_bits;
     for (int i = 0; i < N; i++) {
         out[i].index = idx->cluster_values[start + i];
-        float iprod = cluster_iprod + idx->bias[start + i];
+        float iprod = cluster_iprod;
         for (int j = 0; j < idx->num_groups; j++) {
             int position = qvec_size * (start + i) + G * j;
             int q = read_bytes<G>(&idx->clustered_quant[position]);
             iprod += iprods[j * subcodebook_size + q];
         }
-        out[i].iprod = iprod;
+        out[i].iprod = iprod + idx->bias[start + i];
+        if (i % 10 == 0 && (i % 1000000 < 500)) {
+            float actual_iprod = cblas_sdot(
+                idx->dim,
+                query,
+                1,
+                &data_base.at(i, 0),
+                1
+            );
+            std::cout << "pt " << i << " -> estimated iprod = "
+                << iprod << ", actual iprod = "
+                << actual_iprod << std::endl;
+        }
     }
 }
 
-static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx) {
+static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx, float *query) {
     int start = idx->cluster_start[c];
     int N = idx->cluster_start[c + 1] - idx->cluster_start[c];
     int group_size = byte_size(idx->fine_bits);
     int qvec_size = roundup_line(group_size * idx->num_groups);
     if (group_size == 1) {
-        search_helper<1>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
+        search_helper<1>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
     } else if (group_size == 2) {
-        search_helper<2>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
+        search_helper<2>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
     } else if (group_size == 4) { [[unlikely]]
-        search_helper<4>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
+        search_helper<4>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
     } else if (group_size == 3) { [[unlikely]]
-        search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
+        search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx, query);
     } else { [[unlikely]]
         throw std::runtime_error("invalid number of bytes to write");
     }
