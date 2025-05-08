@@ -32,16 +32,17 @@ struct PQIndex : public Index {
     int fine_bits;
     int num_groups;
     int window; // number of clusters to search
-    box<float[]> bias;
     box<float[]> clusters;
+    box<float[]> clusters_bias;
     box<float[]> codebooks;
-    box<float[]> codebooks_bias;
     box<float[]> transform;
     // cluster_start[i] = index of start of ith cluster
     // size is num_clusters + 1, so last element is total size
     box<int[]> cluster_start;
     // indices of vectors for each cluster
     box<int[]> cluster_values;
+    // bias, grouped like cluster_values
+    box<float[]> bias;
     // grouped like cluster_values
     // stores quantized indices for each vector
     // value size is ceil(fine_bits / 8) bytes
@@ -107,6 +108,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     ret->dim = dim;
     auto learn_bias = preprocess_l2_bias(true, learn);
     auto force_bias = preprocess_l2_bias(true, vectors);
+    auto out_bias = is_l2 ? std::make_unique<float[]>(vectors->length) : nullptr;
     // ret->num_clusters = (int) std::sqrt(learn->length);
     ret->num_clusters = 8192;
     ret->window = 8;
@@ -145,9 +147,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 sub_biases[i + g * learn->length] += -0.5 * vec[j] * vec[j];
             }
         }
-        ret->codebooks_bias = std::make_unique<float[]>(
-            ret->num_groups * subcodebook_size
-        );
         for (int i = 0; i < ret->num_groups; i++) {
             int start_dim = i * group_dim;
             int cur_dim = std::min(group_dim, dim - start_dim);
@@ -162,13 +161,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 nullptr
             );
         }
-        memset(ret->codebooks_bias.get(), 0, ret->num_groups * subcodebook_size * sizeof(float));
-        for (int i = 0; i < ret->num_groups * subcodebook_size; i++) {
-            for (int j = 0; j < group_dim; j++) {
-                float val = ret->codebooks[i * group_dim + j];
-                ret->codebooks_bias[i] -= 0.5 * val * val;
-            }
-        }
     }
     {
         ScopedTimer timer("quantize vectors");
@@ -177,7 +169,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         box<int[]> assignments = std::make_unique<int[]>(vectors->length);
         ret->cluster_start = std::make_unique<int[]>(ret->num_clusters + 1);
         ret->cluster_values = std::make_unique<int[]>(vectors->length);
-        auto clusters_bias = preprocess_l2_bias(true, dim, ret->num_clusters, dim, ret->clusters.get());
+        ret->clusters_bias = preprocess_l2_bias(true, dim, ret->num_clusters, dim, ret->clusters.get());
         compute_assignments(
             vectors->length,
             dim,
@@ -187,7 +179,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
             ret->num_clusters,
             ret->clusters.get(),
             &ret->cluster_start[1], // offset by 1 so we can use an inclusive scan
-            clusters_bias.get(),
+            ret->clusters_bias.get(),
             iprods.get(),
             assignments.get(),
             nullptr,
@@ -203,6 +195,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 int j = temp_index[assignments[i]]++;
                 scatter[i] = j;
                 gather[j] = i;
+                if (out_bias) out_bias[j] = force_bias[i];
             }
         }
         auto fine = transform_fine_vectors(
@@ -287,13 +280,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         double coarse_err = 0.0;
         for (int i = 0; i < vectors->length; i++) {
             while (cc < ret->num_clusters && ret->cluster_start[cc + 1] <= i) cc++;
-            if (cc == ret->num_clusters) {
-                std::cout << "??? we're out of clusters...?" << std::endl;
-                std::cout << "we're at " << i << "/" << vectors->length << std::endl;
-                for (int j = 0; j <= ret->num_clusters; j++) std::cout << " " << ret->cluster_start[j];
-                std::cout << "\n";
-                break;
-            }
             int idx = gather[i];
             float error = 0.0;
             for (int j = 0; j < dim; j++) {
@@ -318,7 +304,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         std::cout << "avg error: " << total_err / vectors->length << std::endl;
         std::cout << "avg error coarse: " << coarse_err / vectors->length << std::endl;
     }
-    ret->bias = std::move(force_bias);
+    ret->bias = std::move(out_bias);
     ret->is_l2 = is_l2;
     return ret;
 }
@@ -327,7 +313,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     PQIndex *idx = (PQIndex *) raw_index;
     auto iprods = std::make_unique<float[]>(idx->num_clusters);
     auto query_xformed = std::make_unique<float[]>(idx->dim);
-    memcpy(iprods.get(), idx->bias.get(), idx->num_clusters * sizeof(float));
+    memcpy(iprods.get(), idx->clusters_bias.get(), idx->num_clusters * sizeof(float));
     cblas_sgemv(
         CblasRowMajor,
         CblasNoTrans,
@@ -353,9 +339,6 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     int subcodebook_size = 1 << idx->fine_bits;
     int total_cb_size = idx->num_groups * subcodebook_size;
     auto cb_iprods = std::make_unique<float[]>(total_cb_size);
-    if (idx->is_l2) {
-        memcpy(cb_iprods.get(), idx->codebooks_bias.get(), total_cb_size * sizeof(float));
-    }
     int group_dim = (idx->dim + idx->num_groups - 1) / idx->num_groups;
     cblas_sgemv(
         CblasRowMajor,
@@ -384,7 +367,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
             cur_dim,
             &query_xformed[start_dim],
             1,
-            idx->is_l2 ? 1.0f : 0.0f,
+            0.0f,
             &cb_iprods[subcodebook_size * i],
             1
         );
@@ -393,8 +376,7 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     int cur = 0;
     for (int i = 0; i < idx->window; i++) {
         int c = cluster_indices[i];
-        // search_cluster(c, &window_results[cur], iprods[c], cb_iprods.get(), idx);
-        search_cluster(c, &window_results[cur], 0.0f, cb_iprods.get(), idx);
+        search_cluster(c, &window_results[cur], iprods[c], cb_iprods.get(), idx);
         cur += idx->cluster_start[c + 1] - idx->cluster_start[c];
     }
     auto wr_begin = &window_results[0];
@@ -756,7 +738,7 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
     int subcodebook_size = 1 << idx->fine_bits;
     for (int i = 0; i < N; i++) {
         out[i].index = idx->cluster_values[start + i];
-        float iprod = cluster_iprod;
+        float iprod = cluster_iprod + idx->bias[start + i];
         for (int j = 0; j < idx->num_groups; j++) {
             int position = qvec_size * (start + i) + G * j;
             int q = read_bytes<G>(&idx->clustered_quant[position]);
