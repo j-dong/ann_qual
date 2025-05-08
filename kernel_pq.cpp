@@ -222,6 +222,18 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         ret->clustered_quant = std::unique_ptr<char[], aligned_deleter>(
             new (std::align_val_t(64)) char[qvec_size * vectors->length]
         );
+        box<float[]> subclusters_bias = std::make_unique<float[]>(subcodebook_size * ret->num_groups);
+        for (int i = 0; i < ret->num_groups; i++) {
+            int start_dim = i * group_dim;
+            int cur_dim = std::min(group_dim, dim - start_dim);
+            for (int j = 0; j < subcodebook_size; j++) {
+                for (int k = 0; k < cur_dim; k++) {
+                    float val = ret->get_codebook(i)[k + j * cur_dim];
+                    subclusters_bias[i * subcodebook_size + j] +=
+                        -0.5f * (val * val);
+                }
+            }
+        }
         box<float[]> qerr = std::make_unique<float[]>(vectors->length);
         box<float[]> qtemp = std::make_unique<float[]>(dim);
         for (int i = 0; i < ret->num_groups; i++) {
@@ -243,7 +255,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 subcodebook_size,
                 &ret->codebooks[i * (size_t) subcodebook_size * group_dim],
                 nullptr,
-                clusters_bias.get(),
+                &subclusters_bias[i * subcodebook_size],
                 sub_iprods.get(),
                 sub_assignments.get(),
                 nullptr,
