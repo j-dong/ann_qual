@@ -26,7 +26,7 @@ static void unmap_file(FileMappingData *data);
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define PATH_PREFIX "/mnt/g/vectors/sift/sift"
+#define PATH_PREFIX "/mnt/g/vectors/siftsmall/siftsmall"
 
 struct FileMappingData {
     void *mapping_ptr;

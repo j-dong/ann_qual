@@ -72,7 +72,7 @@ constexpr int byte_size(int bits) {
 }
 
 constexpr int roundup_line(int bytes) {
-    return (bytes + 63) / 64;
+    return (bytes + 63) / 64 * 64;
 }
 
 constexpr int BLOCK_SIZE = 1024;
@@ -139,7 +139,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         );
         memset(sub_biases.get(), 0, ret->num_groups * learn->length * sizeof(float));
         for (int i = 0; i < learn->length; i++) {
-            float *vec = learn->vec + 1 + i * (dim + 1);
+            float *vec = &transformed_learn[i * dim];
             for (int j = 0; j < dim; j++) {
                 int g = j / group_dim;
                 sub_biases[i + g * learn->length] += -0.5 * vec[j] * vec[j];
@@ -193,7 +193,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
             nullptr,
             nullptr
         );
-        simd_pfxsum(ret->cluster_start.get(), ret->num_clusters);
+        simd_pfxsum(ret->cluster_start.get(), ret->num_clusters + 1);
         auto scatter = std::make_unique<int[]>(vectors->length);
         auto gather = ret->cluster_values.get();
         {
@@ -261,8 +261,16 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         }
         int cc = 0;
         double total_err = 0.0;
+        double coarse_err = 0.0;
         for (int i = 0; i < vectors->length; i++) {
-            while (ret->cluster_start[cc + 1] <= i) cc++;
+            while (cc < ret->num_clusters && ret->cluster_start[cc + 1] <= i) cc++;
+            if (cc == ret->num_clusters) {
+                std::cout << "??? we're out of clusters...?" << std::endl;
+                std::cout << "we're at " << i << "/" << vectors->length << std::endl;
+                for (int j = 0; j <= ret->num_clusters; j++) std::cout << " " << ret->cluster_start[j];
+                std::cout << "\n";
+                break;
+            }
             int idx = gather[i];
             float error = 0.0;
             for (int j = 0; j < dim; j++) {
@@ -280,10 +288,12 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                     std::cout << "  fine = " << fine[j + idx * dim] << ", diff = " << src - clust << std::endl;
                 }
                 error += diff * diff;
+                coarse_err += (clust - src) * (clust - src);
             }
             total_err += error;
         }
         std::cout << "avg error: " << total_err / vectors->length << std::endl;
+        std::cout << "avg error coarse: " << coarse_err / vectors->length << std::endl;
     }
     ret->bias = std::move(force_bias);
     ret->is_l2 = is_l2;
@@ -439,6 +449,7 @@ void simd_pfxsum(int *arr, int N) {
 
 template<bool LOG>
 void compute_k_means(int num_clusters, int dim, int stride, int num_vectors, float *vectors, float *bias, float *out_clusters, box<int[]> *out_assignments) {
+    std::cout << "k-means(" << num_clusters << ", " << dim << "@" << stride << ", x" << num_vectors << ")\n";
     std::unique_ptr<int[]> assignments = std::make_unique<int[]>(num_vectors);
     float *clusters = out_clusters;
     std::unique_ptr<float[]> clusters_temp_box = std::make_unique<float[]>(num_clusters * dim);
