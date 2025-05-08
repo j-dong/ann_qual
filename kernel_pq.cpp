@@ -254,9 +254,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 nullptr,
                 nullptr
             );
-            for (int k = 0; k < 20 && i < 10; k++) {
-                std::cout << "d" << i << "[" << k << "] -> #" << sub_assignments[k] << std::endl;
-            }
             write_assignments(
                 vectors->length,
                 sub_assignments.get(),
@@ -267,42 +264,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 ret->clustered_quant.get()
             );
         }
-        // print the first codebook
-        for (int i = 0; i < subcodebook_size; i++) {
-            std::cout << "codebook1[" << i << "] =";
-            for (int j = 0; j < group_dim; j++) {
-                std::cout << " " << ret->get_codebook(0)[j + i * group_dim];
-            }
-            std::cout << "\n";
-        }
-        int cc = 0;
-        double total_err = 0.0;
-        double coarse_err = 0.0;
-        for (int i = 0; i < vectors->length; i++) {
-            while (cc < ret->num_clusters && ret->cluster_start[cc + 1] <= i) cc++;
-            int idx = gather[i];
-            float error = 0.0;
-            for (int j = 0; j < dim; j++) {
-                float src = vectors->at(idx, j);
-                float clust = ret->clusters[cc * dim + j];
-                int g = j / group_dim;
-                int val = 0;
-                int position = qvec_size * i + 1 * g;
-                memcpy(&val, &ret->clustered_quant[position], 1);
-                float quant = ret->get_codebook(g)[group_dim * val + (j % group_dim)];
-                float diff = (clust + quant) - src;
-                if (i < 20 && j < 5) {
-                    std::cout << "index " << i << " -> " << idx << " in cluster " << cc << "; src = " << src << ", clust = " << clust << std::endl;
-                    std::cout << "  g = " << g << ", val = " << val << ", quant = " << quant << ", clust + quant = " << clust + quant << std::endl;
-                    std::cout << "  fine = " << fine[j + idx * dim] << ", diff = " << src - clust << std::endl;
-                }
-                error += diff * diff;
-                coarse_err += (clust - src) * (clust - src);
-            }
-            total_err += error;
-        }
-        std::cout << "avg error: " << total_err / vectors->length << std::endl;
-        std::cout << "avg error coarse: " << coarse_err / vectors->length << std::endl;
     }
     ret->bias = std::move(out_bias);
     ret->is_l2 = is_l2;
@@ -471,7 +432,6 @@ void simd_pfxsum(int *arr, int N) {
 
 template<bool LOG>
 void compute_k_means(int num_clusters, int dim, int stride, int num_vectors, float *vectors, float *bias, float *out_clusters, box<int[]> *out_assignments) {
-    std::cout << "k-means(" << num_clusters << ", " << dim << "@" << stride << ", x" << num_vectors << ")\n";
     std::unique_ptr<int[]> assignments = std::make_unique<int[]>(num_vectors);
     float *clusters = out_clusters;
     std::unique_ptr<float[]> clusters_temp_box = std::make_unique<float[]>(num_clusters * dim);
@@ -746,18 +706,6 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
             iprod += iprods[j * subcodebook_size + q];
         }
         out[i].iprod = iprod + idx->bias[start + i];
-        if (query == data_query.vec + 1 && i % 10 == 0 && (i % 1000000 < 500)) {
-            float actual_iprod = cblas_sdot(
-                idx->dim,
-                query,
-                1,
-                &data_base.at(i, 0),
-                1
-            );
-            std::cout << "pt " << out[i].index << "(" << i << ")" << " -> estimated iprod = "
-                << iprod << ", actual iprod = "
-                << actual_iprod << std::endl;
-        }
     }
 }
 

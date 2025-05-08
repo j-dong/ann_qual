@@ -38,7 +38,7 @@ int main(int argc, char **argv) {
             compute_ann_pq(
                 &data_base,
                 100,
-                &data_query.vec[1],
+                &data_query.vec[1 + i * (data_query.dim + 1)],
                 result.data(),
                 index2.get()
             );

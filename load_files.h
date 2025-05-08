@@ -1,4 +1,4 @@
-#include <cstdint>
+#include <cstddef>
 
 struct RawVectorData {
     void *filestart;
