@@ -101,8 +101,11 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     ret->dim = dim;
     auto learn_bias = preprocess_l2_bias(true, learn);
     auto force_bias = preprocess_l2_bias(true, vectors);
-    ret->num_clusters = (int) std::sqrt(learn->length);
-    ret->window = 4;
+    // ret->num_clusters = (int) std::sqrt(learn->length);
+    ret->num_clusters = 8192;
+    ret->window = 8;
+    ret->fine_bits = 8;
+    ret->num_groups = 16;
     // ret->num_clusters = 128;
     // ret->num_clusters = 8192;
     box<int[]> learn_assignments;
@@ -116,8 +119,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         ret->transform = std::make_unique<float[]>(dim * dim);
         generate_transform(ret->transform.get(), dim);
         box<float[]> transformed_learn = transform_fine_vectors(learn, ret->num_clusters, ret->clusters.get(), learn_assignments.get(), ret->transform.get());
-        ret->fine_bits = 4;
-        ret->num_groups = 4;
+        // ret->fine_bits = 8;
         int subcodebook_size = 1 << ret->fine_bits;
         int group_dim = (dim + ret->num_groups - 1) / ret->num_groups;
         ret->codebooks = std::make_unique<float[]>(
@@ -214,6 +216,8 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         ret->clustered_quant = std::unique_ptr<char[]>(
             new (std::align_val_t(64)) char[qvec_size * vectors->length]
         );
+        box<float[]> qerr = std::make_unique<float[]>(vectors->length);
+        box<float[]> qtemp = std::make_unique<float[]>(dim);
         for (int i = 0; i < ret->num_groups; i++) {
             int start_dim = i * group_dim;
             int cur_dim = std::min(group_dim, dim - start_dim);
@@ -249,6 +253,31 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 ret->clustered_quant.get()
             );
         }
+        int cc = 0;
+        double total_err = 0.0;
+        for (int i = 0; i < vectors->length; i++) {
+            while (ret->cluster_start[cc + 1] <= i) cc++;
+            int idx = gather[i];
+            float error = 0.0;
+            for (int j = 0; j < dim; j++) {
+                float src = vectors->at(idx, j);
+                float clust = ret->clusters[cc * dim + j];
+                int g = j / group_dim;
+                int val = 0;
+                int position = qvec_size * i + 1 * g;
+                memcpy(&val, &ret->clustered_quant[position], 1);
+                float quant = ret->get_codebook(g)[group_dim * val + (j % group_dim)];
+                float diff = (clust + quant) - src;
+                if (i < 20 && j < 5) {
+                    std::cout << "index " << i << " -> " << idx << " in cluster " << cc << "; src = " << src << ", clust = " << clust << std::endl;
+                    std::cout << "  g = " << g << ", val = " << val << ", quant = " << quant << ", clust + quant = " << clust + quant << std::endl;
+                    std::cout << "  fine = " << fine[j + idx * dim] << ", diff = " << src - clust << std::endl;
+                }
+                error += diff * diff;
+            }
+            total_err += error;
+        }
+        std::cout << "avg error: " << total_err / vectors->length << std::endl;
     }
     ret->bias = std::move(force_bias);
     ret->is_l2 = is_l2;
@@ -471,11 +500,11 @@ void compute_k_means(int num_clusters, int dim, int stride, int num_vectors, flo
         // rescale cluster center
         for (int i = 0; i < num_clusters; i++) {
             if (clusters_size[i] == 0) {
-                int j = rand_vec(rng);
-                std::memcpy(&clusters_temp[i * dim],
-                            &vectors[j * stride],
-                            sizeof(float) * dim);
-                if constexpr (LOG) std::cout << "- resetting!" << std::endl;
+                // int j = rand_vec(rng);
+                // std::memcpy(&clusters_temp[i * dim],
+                //             &vectors[j * stride],
+                //             sizeof(float) * dim);
+                // if constexpr (LOG) std::cout << "- resetting!" << std::endl;
                 continue;
             }
             cblas_sscal(
@@ -486,12 +515,38 @@ void compute_k_means(int num_clusters, int dim, int stride, int num_vectors, flo
             );
         }
         std::swap(clusters, clusters_temp);
+        int nsplit = 0;
+        for (int i = 0; i < num_clusters; i++) {
+            if (clusters_size[i] != 0) {
+                continue;
+            }
+            int o;
+            for (o = 0; o < num_clusters; o++) {
+                float p = (clusters_size[o] - 1.0f) / (num_vectors - num_clusters);
+                float r = std::generate_canonical<float, 16>(rng);
+                if (r < p) break;
+            }
+            memcpy(&clusters[i * dim], &clusters[o * dim], sizeof(float) * dim);
+            for (int k = 0; k < dim; k++) {
+                if (k % 2) {
+                    clusters[i * dim + k] *= 1.0 + 1.0 / 1024;
+                    clusters[o * dim + k] *= 1.0 - 1.0 / 1024;
+                } else {
+                    clusters[i * dim + k] *= 1.0 - 1.0 / 1024;
+                    clusters[o * dim + k] *= 1.0 + 1.0 / 1024;
+                }
+            }
+            clusters_size[i] = clusters_size[o] / 2;
+            clusters_size[o] -= clusters_size[i];
+            nsplit++;
+        }
         converged = changed == 0;
         if constexpr (LOG) std::cout << "- " << changed << " assignments changed" << std::endl;
         if constexpr (LOG) std::cout << "- energy: " << energy << std::endl;
+        if constexpr (LOG) if (nsplit) std::cout << "- split: " << nsplit << std::endl;
         if (changed < num_vectors / 500 && iteration >= 20) {
-            std::cout << "- stopping early!" << std::endl;
-            break;
+            // std::cout << "- stopping early!" << std::endl;
+            // break;
         }
         // update clusters_bias if bias != nullptr
         if (bias) {
@@ -612,7 +667,7 @@ void write_bytes(char *out, int x) {
 
 template<int G>
 int read_bytes(char *in) {
-    int x;
+    int x = 0;
     memcpy(&x, in, G);
     return x;
 }
@@ -649,10 +704,6 @@ void search_helper(int start, int N, WindowResult *out, int qvec_size, float clu
         for (int j = 0; j < idx->num_groups; j++) {
             int position = qvec_size * (start + i) + G * j;
             int q = read_bytes<G>(&idx->clustered_quant[position]);
-            if (q >= subcodebook_size) {
-                std::cerr << "oh no q = " << q << " >= " << subcodebook_size << "!!!" << std::endl;
-                abort();
-            }
             iprod += iprods[j * subcodebook_size + q];
         }
         out[i].iprod = iprod;

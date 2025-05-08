@@ -11,7 +11,7 @@
 # endif
 # include <windows.h>
 
-#define PATH_PREFIX "G:\\vectors\\sift\\sift"
+#define PATH_PREFIX "G:\\vectors\\siftsmall\\siftsmall"
 
 struct FileMappingData {
     HANDLE hFileMapping;
@@ -39,12 +39,20 @@ static void unmap_file(FileMappingData *data);
 RawVectorData data_base;
 RawVectorData data_query;
 RawVectorData data_learn;
+IntVectorData data_ground;
 
-static FileMappingData mapping_data[3];
+static FileMappingData mapping_data[4];
 
 void load_vector(const char *fname, RawVectorData *data, FileMappingData *map) {
     data->filestart = map_file(fname, map, &data->filesize);
     data->vec = (float *) data->filestart;
+    data->dim = *(int *) data->filestart;
+    data->length = data->filesize / 4 / (1 + data->dim);
+}
+
+void load_vector(const char *fname, IntVectorData *data, FileMappingData *map) {
+    data->filestart = map_file(fname, map, &data->filesize);
+    data->vec = (int *) data->filestart;
     data->dim = *(int *) data->filestart;
     data->length = data->filesize / 4 / (1 + data->dim);
 }
@@ -55,6 +63,12 @@ void load_files() {
         load_vector(PATH_PREFIX "_query.fvecs", &data_query, &mapping_data[1]);
         try {
             load_vector(PATH_PREFIX "_learn.fvecs", &data_learn, &mapping_data[2]);
+            try {
+                load_vector(PATH_PREFIX "_groundtruth.ivecs", &data_ground, &mapping_data[3]);
+            } catch (...) {
+                unmap_file(&mapping_data[2]);
+                throw;
+            }
         } catch (...) {
             unmap_file(&mapping_data[1]);
             throw;
@@ -66,6 +80,7 @@ void load_files() {
 }
 
 void close_files() {
+    unmap_file(&mapping_data[3]);
     unmap_file(&mapping_data[2]);
     unmap_file(&mapping_data[1]);
     unmap_file(&mapping_data[0]);
