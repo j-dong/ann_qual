@@ -6,9 +6,9 @@ SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp timer.cpp kernel_
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -fsanitize=address
+CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
 CPPFLAGS :=
-LDFLAGS := -g -fsanitize=address
+LDFLAGS := -g
 
 ifeq ($(PLATFORM),win32)
 	EXESUFF := .exe
