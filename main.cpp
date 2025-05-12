@@ -2,6 +2,7 @@
 
 #include "kernel_naive.h"
 #include "kernel_pq.h"
+#include "kernel_hnsw.h"
 #include "timer.h"
 
 #include <iostream>
@@ -10,7 +11,13 @@
 
 int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     load_files();
-    auto index2 = preprocess_ann_pq(
+    // auto index2 = preprocess_ann_pq(
+    //     true,
+    //     &data_base,
+    //     &data_base
+    //     // &data_learn
+    // );
+    auto index3 = preprocess_ann_hnsw(
         true,
         &data_base,
         &data_base
@@ -35,12 +42,12 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     for (int i = 0; i < trials; i++) {
         {
             ScopedTimer timer("ANN", i);
-            compute_ann_pq(
+            compute_ann_hnsw(
                 &data_base,
                 100,
                 &data_query.vec[1 + i * (data_query.dim + 1)],
                 result.data(),
-                index2.get()
+                index3.get()
             );
         }
         int truth = data_ground.at(i, 0);

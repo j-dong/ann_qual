@@ -267,7 +267,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     return ret;
 }
 
-void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
+int compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
     PQIndex *idx = (PQIndex *) raw_index;
     auto iprods = std::make_unique<float[]>(idx->num_clusters);
     auto query_xformed = std::make_unique<float[]>(idx->dim);
@@ -340,10 +340,12 @@ void compute_ann_pq(RawVectorData *vectors, int k, float *query, int *result, In
     }
     auto wr_begin = &window_results[0];
     auto wr_end = &window_results[cur];
+    if (k > cur) [[unlikely]] k = cur;
     std::partial_sort(wr_begin, wr_begin + k, wr_end);
     for (int i = 0; i < k; i++) {
         result[i] = window_results[i].index;
     }
+    return k;
 }
 
 template<bool LOG>

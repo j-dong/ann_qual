@@ -84,3 +84,31 @@ void simd_pfxsum(int *arr, int N) {
     }
 }
 
+
+float simd_l2dist(float *vec1, float *vec2, int dim) {
+    __m256 vsum = _mm256_setzero_ps();
+    int i;
+    for (i = 0; i + 7 < dim; i += 8) {
+        __m256 a = _mm256_loadu_ps(&vec1[i]),
+               b = _mm256_loadu_ps(&vec2[i]);
+        __m256 diff = _mm256_sub_ps(a, b);
+        __m256 dist = _mm256_mul_ps(diff, diff);
+        vsum = _mm256_add_ps(vsum, dist);
+    }
+    __m128 hiQ = _mm256_extractf128_ps(vsum, 1);
+    __m128 loQ = _mm256_castps256_ps128(vsum);
+    __m128 sumQ = _mm_add_ps(loQ, hiQ);
+    __m128 loD = sumQ;
+    __m128 hiD = _mm_movehl_ps(sumQ, sumQ);
+    __m128 sumD = _mm_add_ps(loD, hiD);
+    __m128 lo = sumD, hi = _mm_shuffle_ps(sumD, sumD, 0x1);
+    __m128 sum_ = _mm_add_ps(lo, hi);
+    float sum = _mm_cvtss_f32(sum_);
+    for (; i < dim; i++) {
+        float a = vec1[i], b = vec2[i];
+        float diff = a - b;
+        float dist = diff * diff;
+        sum += dist;
+    }
+    return sum;
+}

@@ -22,7 +22,7 @@ std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, 
     return ret;
 }
 
-void compute_ann_naive(
+int compute_ann_naive(
     RawVectorData *vectors,
     int k,
     float *query,
@@ -53,9 +53,12 @@ void compute_ann_naive(
         &temp_iprods[0],
         1
     );
+    auto comp = [&temp_iprods](int a, int b) { return temp_iprods[a] > temp_iprods[b]; };
+    if ((size_t) k > temp_indices.size()) k = temp_indices.size();
     std::partial_sort(temp_indices.begin(),
                       temp_indices.begin() + k,
                       temp_indices.end(),
-                      [&temp_iprods](int a, int b) { return temp_iprods[a] > temp_iprods[b]; });
+                      comp);
     memcpy(result, temp_indices.data(), sizeof(int) * k);
+    return k;
 }
