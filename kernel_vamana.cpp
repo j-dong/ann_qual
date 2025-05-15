@@ -348,6 +348,7 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
         }
         visited.set(cur.vertex.i);
         out_visited.push_back(cur);
+        search_list.reserve_more(neighbors(cur.vertex).size());
         auto ins = search_list.do_insert();
         if (p == cur.vertex) {
             found_p = true;
@@ -381,7 +382,8 @@ void VamanaIndex::robustPrune(VertexPtr p, std::vector<PQElement> &out, float al
     std::sort(out.begin(), out.end(), CompareDistance());
     int count = 0;
     auto end = out.end();
-    for (auto it = out.begin(); it != end; ++it) {
+    auto it = out.begin();
+    for (; it != end; ++it) {
         auto &cur = *it;
         if (to_remove[cur.vertex.i]) continue;
         count++;
@@ -395,7 +397,7 @@ void VamanaIndex::robustPrune(VertexPtr p, std::vector<PQElement> &out, float al
         }
     }
     out.erase(
-        std::remove_if(out.begin(), out.end(),
+        std::remove_if(out.begin(), it,
                        [&to_remove](PQElement &e) { return to_remove[e.vertex.i]; }),
         out.end());
     releaseVisitedMap(std::move(to_remove));

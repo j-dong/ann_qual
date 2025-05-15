@@ -1,6 +1,7 @@
 #include "simd_utils.h"
 
 #include <immintrin.h>
+#include <cstdint>
 #include <limits>
 
 int simd_argmax(float *vec, int dim) {
