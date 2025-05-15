@@ -2,11 +2,12 @@ include plat.mk
 
 CXX ?= g++
 
-SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp timer.cpp kernel_utils.cpp simd_utils.cpp
+SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp kernel_vamana.cpp timer.cpp kernel_utils.cpp simd_utils.cpp
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
+# CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
+CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra
 CPPFLAGS :=
 LDFLAGS := -g
 
@@ -21,7 +22,7 @@ else
 	LIBS := -lblas
 endif
 
-test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/kernel_hnsw.o objs/timer.o objs/kernel_utils.o objs/simd_utils.o $(EXTRA_OBJS)
+test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/kernel_hnsw.o objs/kernel_vamana.o objs/timer.o objs/kernel_utils.o objs/simd_utils.o $(EXTRA_OBJS)
 	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
 
 objs/%.o: %.cpp
@@ -46,3 +47,4 @@ clean:
 	$(RM) $(OBJS) $(DEPS) $(EXTRA_OBJS) plat.mk
 
 .PHONY: clean
+.SUFFIXES:

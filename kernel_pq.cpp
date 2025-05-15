@@ -603,11 +603,11 @@ void write_assignments(int num_vectors, int *assignments, int *scatter, int bits
         write_helper<1>(num_vectors, assignments, scatter, qvec_size, dim_i, out);
     } else if (group_size == 2) {
         write_helper<2>(num_vectors, assignments, scatter, qvec_size, dim_i, out);
-    } else if (group_size == 4) { [[unlikely]]
+    } else [[unlikely]] if (group_size == 4) {
         write_helper<4>(num_vectors, assignments, scatter, qvec_size, dim_i, out);
-    } else if (group_size == 3) { [[unlikely]]
+    } else if (group_size == 3) {
         write_helper<3>(num_vectors, assignments, scatter, qvec_size, dim_i, out);
-    } else { [[unlikely]]
+    } else {
         throw std::runtime_error("invalid number of bytes to write");
     }
 }
@@ -636,11 +636,11 @@ static void search_cluster(int c, WindowResult *out, float cluster_iprod, float 
         search_helper<1>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else if (group_size == 2) {
         search_helper<2>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
-    } else if (group_size == 4) { [[unlikely]]
+    } else [[unlikely]] if (group_size == 4) {
         search_helper<4>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
-    } else if (group_size == 3) { [[unlikely]]
+    } else if (group_size == 3) {
         search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
-    } else { [[unlikely]]
+    } else {
         throw std::runtime_error("invalid number of bytes to write");
     }
 }

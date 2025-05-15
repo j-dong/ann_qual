@@ -3,6 +3,8 @@
 #include "load_files.h"
 #include "timer.h"
 #include "simd_utils.h"
+#include "graph_utils.h"
+#include "visited_map.h"
 
 #ifndef NOMINMAX
 # define NOMINMAX 1
@@ -19,15 +21,6 @@ struct HNSWIndex;
 void *resolveVertex(HNSWIndex *, uint32_t);
 
 namespace {
-struct Ptr {
-    uint32_t i;
-
-    Ptr() = default;
-    explicit Ptr(uint32_t i) : i(i) {}
-    Ptr(nullptr_t) : i(UINT32_MAX) {}
-    explicit operator bool() const { return i != UINT32_MAX; }
-};
-struct VertexPtr : Ptr { using Ptr::Ptr; };
 struct LinkPtr : Ptr { using Ptr::Ptr; };
 
 struct Vertex;
@@ -49,56 +42,28 @@ struct Vertex {
     Vertex(int id, float *data) : id(id), data(data) {}
 };
 
-struct PQElement {
-    float dist;
-    VertexPtr vertex;
-
-    PQElement(float dist, VertexPtr vertex) : dist(dist), vertex(vertex) {}
-};
-
-struct CompMaxDist {
-    bool operator()(const PQElement &a, const PQElement &b) {
-        return a.dist < b.dist;
-    }
-};
-struct CompMinDist {
-    bool operator()(const PQElement &a, const PQElement &b) {
-        return a.dist > b.dist;
-    }
-};
-using CompareDistance = CompMaxDist;
-
 enum class Lowering {
     SameLevel,
     Lower,
 };
 
 template<typename Comp>
-struct my_heap : std::priority_queue<PQElement, std::vector<PQElement>, Comp> {
-    using Base = std::priority_queue<PQElement, std::vector<PQElement>, Comp>;
+struct my_heap : vertex_heap<Comp> {
     template<typename Comp2>
     friend struct my_heap;
 
     const std::vector<PQElement> &elements() { return this->c; }
     const std::vector<PQElement> move_elements() && { return std::move(this->c); }
 
-    my_heap() : Base::priority_queue() {}
-    my_heap(std::vector<PQElement> &&vec) : Base::priority_queue(Comp(), vec) {}
+    my_heap() : vertex_heap<Comp>() {}
+    explicit my_heap(std::vector<PQElement> &&vec) : vertex_heap<Comp>(std::move(vec)) {}
+    template<typename Comp2>
+    explicit my_heap(const my_heap<Comp2> &other) : vertex_heap<Comp>(other) {}
 
     void lower(HNSWIndex *idx) {
         for (PQElement &x : this->c) {
             Vertex *v = (Vertex *) resolveVertex(idx, x.vertex.i);
             x.vertex = v->below;
-        }
-    }
-    template<typename Comp2>
-    my_heap(const my_heap<Comp2> &other, Lowering lower, HNSWIndex *idx) : Base(Comp(), other.c) {
-        switch (lower) {
-        case Lowering::Lower:
-            this->lower(idx);
-            break;
-        case Lowering::SameLevel:
-            break;
         }
     }
 };
@@ -108,25 +73,6 @@ struct max_heap : my_heap<CompMaxDist> {
 };
 struct min_heap : my_heap<CompMinDist> {
     using my_heap<CompMinDist>::my_heap;
-};
-
-struct VisitedMap {
-    char *vec = nullptr;
-    char tag;
-    bool cleared = false;
-
-    VisitedMap(size_t size) {
-        vec = new char[size];
-    }
-    VisitedMap(VisitedMap &&o) : vec(o.vec) {
-        o.vec = nullptr;
-    }
-    VisitedMap &operator=(VisitedMap &&o) {
-        if (&o == this) return *this;
-        if (vec) { delete vec; vec = nullptr; }
-        std::swap(vec, o.vec);
-    }
-    ~VisitedMap() { delete[] vec; }
 };
 }
 
@@ -206,17 +152,7 @@ struct HNSWIndex : Index {
     }
 
     VisitedMap takeVisitedMap() {
-        if (visited_pool.size() == 0) {
-            visited_pool.emplace_back(maxVertices);
-        }
-        VisitedMap ret = std::move(visited_pool.back());
-        if (!ret.cleared) {
-            memset(ret.vec, 0, maxVertices);
-            ret.tag = 0;
-        }
-        ret.tag++;
-        visited_pool.pop_back();
-        return ret;
+        return VisitedMap::takeFromPool(visited_pool, maxVertices);
     }
 
     void releaseVisitedMap(VisitedMap &&map) {
@@ -254,7 +190,7 @@ std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, R
         throw std::runtime_error("we only support L2 for HNSW");
     }
     (void) learn;
-    auto ret = std::make_unique<HNSWIndex>(vectors->dim, vectors->length, 16, 64);
+    auto ret = std::make_unique<HNSWIndex>(vectors->dim, vectors->length, 32, 128);
     for (int i = 0; i < vectors->length; i++) {
         if (i % 1000 == 0) {
             std::cout << "insert progress: " << i << "/" << vectors->length << std::endl;
@@ -266,11 +202,11 @@ std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, R
 }
 
 int compute_ann_hnsw(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
+    (void) vectors;
     HNSWIndex *index = (HNSWIndex *) raw_index;
     auto vec = index->query(query, k, std::max(10, k));
     for (int i = 0; i < (int) vec.size(); i++) {
-        float *data = index->get(vec[i].vertex).data;
-        result[i] = (data - &vectors->at(i, 0)) / (vectors->dim + 1);
+        result[i] = index->get(vec[i].vertex).id;
     }
     return vec.size();
 }
@@ -349,11 +285,9 @@ void HNSWIndex::insert(int id, float *data) {
 }
 
 max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
-    VisitedMap v = takeVisitedMap();
-    auto *visited = v.vec;
-    auto visit_tag = v.tag;
+    VisitedMap visited = takeVisitedMap();
 
-    min_heap candidates(ep, Lowering::SameLevel, this);
+    min_heap candidates(ep);
     max_heap nearest = std::move(ep);
     float farthest_dist = nearest.top().dist;
 
@@ -368,7 +302,7 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
             VertexPtr e = link.vertex;
             int id = get(e).id;
             if (visited[id]) continue;
-            visited[id] = visit_tag;
+            visited.set(id);
             float dist = computeDistance(get(e).data, data);
             if (dist < farthest_dist || candidates.size() < (size_t) ef) {
                 pushq(candidates, e, dist);

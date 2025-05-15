@@ -3,6 +3,7 @@
 #include "kernel_naive.h"
 #include "kernel_pq.h"
 #include "kernel_hnsw.h"
+#include "kernel_vamana.h"
 #include "timer.h"
 
 #include <iostream>
@@ -17,7 +18,13 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     //     &data_base
     //     // &data_learn
     // );
-    auto index3 = preprocess_ann_hnsw(
+    // auto index3 = preprocess_ann_hnsw(
+    //     true,
+    //     &data_base,
+    //     &data_base
+    //     // &data_learn
+    // );
+    auto index4 = preprocess_ann_vamana(
         true,
         &data_base,
         &data_base
@@ -42,12 +49,12 @@ int main([[maybe_unused]] int argc, [[maybe_unused]] char **argv) {
     for (int i = 0; i < trials; i++) {
         {
             ScopedTimer timer("ANN", i);
-            compute_ann_hnsw(
+            compute_ann_vamana(
                 &data_base,
                 100,
                 &data_query.vec[1 + i * (data_query.dim + 1)],
                 result.data(),
-                index3.get()
+                index4.get()
             );
         }
         int truth = data_ground.at(i, 0);
