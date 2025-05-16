@@ -232,12 +232,6 @@ struct VamanaIndex : Index {
         all_neighbors[maxDegree * p.i + get(p).numNeighbors++] = n;
     }
 
-    void set_neighbors(VertexPtr p, VertexPtr *arr, int n) {
-        assert(n <= maxDegree);
-        get(p).numNeighbors = n;
-        memcpy(&all_neighbors[maxDegree * p.i], arr, n * sizeof(VertexPtr));
-    }
-
     VisitedMap takeVisitedMap() {
         return VisitedMap::takeFromPool(visited_pool, maxVertices);
     }
@@ -407,6 +401,7 @@ void VamanaIndex::robustPrune(VertexPtr p, std::vector<PQElement> &out, float al
 
 void VamanaIndex::refine(float alpha) {
     if (visit_order.empty()) {
+        ScopedTimer timer("shuffle visit order");
         visit_order.resize(maxVertices);
         for (int i = 0; i < maxVertices; i++) {
             visit_order[i].i = i;
@@ -417,7 +412,11 @@ void VamanaIndex::refine(float alpha) {
     std::vector<PQElement> temp_neighbors;
     p_visited.reserve(L * 2);
     temp_neighbors.reserve(maxDegree + 1);
-    for (VertexPtr p : visit_order) {
+    for (size_t vi = 0; vi < visit_order.size(); vi++) {
+        if (vi % 1000 == 0) {
+            std::cout << "refine (alpha=" << alpha << ") progress: " << vi << "/" << visit_order.size() << std::endl;
+        }
+        VertexPtr p = visit_order[vi];
         p_visited.clear();
         auto pn = neighbors(p);
         greedySearch(p, p_visited);

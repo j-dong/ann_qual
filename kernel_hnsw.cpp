@@ -16,6 +16,8 @@
 #include <random>
 #include <stdexcept>
 #include <iostream>
+#include <cassert>
+#include <span>
 
 #include "argparse/argparse.hpp"
 
@@ -23,21 +25,9 @@ struct HNSWIndex;
 void *resolveVertex(HNSWIndex *, uint32_t);
 
 namespace {
-struct LinkPtr : Ptr { using Ptr::Ptr; };
-
-struct Vertex;
-
-struct Link {
-    VertexPtr vertex;
-    LinkPtr next;
-
-    Link(VertexPtr vertex, LinkPtr next) : vertex(vertex), next(next) {}
-};
-
 struct Vertex {
-    LinkPtr neighbors = nullptr;
-    VertexPtr below = nullptr;
     int numNeighbors = 0;
+    VertexPtr below = nullptr;
     int id;
     float *data;
 
@@ -82,8 +72,7 @@ struct HNSWIndex : Index {
     int dim;
 
     std::vector<Vertex> vertices;
-    std::vector<Link> links;
-    LinkPtr freeList = nullptr;
+    std::vector<VertexPtr> all_neighbors;
     int maxVertices;
     int maxDegree;
     double m_L;
@@ -100,7 +89,11 @@ struct HNSWIndex : Index {
         rng.seed(0xdeadbeef);
         // extremely conservative bound
         vertices.reserve(2 * maxVertices);
-        links.reserve(2 * maxVertices * maxDegree);
+        for (int i = 0; i < maxVertices; i++) {
+            vertices.emplace_back(i, nullptr);
+        }
+        // maxVertices * 2 * maxDegree + maxVertices * maxDegree
+        all_neighbors.reserve(3 * (size_t) maxVertices * (size_t) maxDegree);
         // initialize visited maps
         // if multi-threaded, we should initialize one for each thread
         for (int i = 0; i < 1; i++) {
@@ -118,39 +111,38 @@ struct HNSWIndex : Index {
 
     Vertex &get(VertexPtr p) { return vertices[p.i]; }
     Vertex &get(Vertex *v) const { return *v; }
-    Link &get(LinkPtr p) { return links[p.i]; }
-    VertexPtr makeVertex(int id, float *data) {
+    VertexPtr makeVertex(int id, float *data, int level) {
+        if (level == 0) {
+            vertices[id].data = data;
+            return VertexPtr(id);
+        }
         VertexPtr p((uint32_t) vertices.size());
         vertices.emplace_back(id, data);
         return p;
     }
-    LinkPtr makeLink(VertexPtr vertex, LinkPtr next) {
-        if (freeList) {
-            LinkPtr ret = freeList;
-            freeList = get(ret).next;
-            get(ret).vertex = vertex;
-            get(ret).next = next;
-            return ret;
-        }
-        LinkPtr p((uint32_t) links.size());
-        links.emplace_back(vertex, next);
-        return p;
+    bool isLayer0(VertexPtr p) {
+        return (int) p.i < maxVertices;
     }
-
-    void release(LinkPtr *p) { release(*p); *p = nullptr; }
-    void release(LinkPtr p) {
-        LinkPtr cur = p;
-        while (cur) {
-            Link &l = get(cur);
-            l.vertex = nullptr;
-            if (!l.next) {
-                l.next = freeList;
-                break;
-            } else {
-                cur = l.next;
-            }
+    std::span<VertexPtr> getNeighbors(VertexPtr p) {
+        if (isLayer0(p)) {
+            return std::span<VertexPtr>(&all_neighbors[2 * maxDegree * p.i],
+                                        get(p).numNeighbors);
         }
-        freeList = p;
+        int idx = 2 * maxDegree * maxVertices
+            + maxDegree * (p.i - maxVertices);
+        return std::span<VertexPtr>(&all_neighbors[idx],
+                                    get(p).numNeighbors);
+    }
+    void pushNeighbor(VertexPtr p, VertexPtr n) {
+        if (isLayer0(p)) {
+            assert(get(p).numNeighbors < 2 * maxDegree);
+            all_neighbors[2 * maxDegree * p.i + get(p).numNeighbors++] = n;
+            return;
+        }
+        assert(get(p).numNeighbors < maxDegree);
+        int idx = 2 * maxDegree * maxVertices
+            + maxDegree * (p.i - maxVertices);
+        all_neighbors[idx + get(p).numNeighbors++] = n;
     }
 
     VisitedMap takeVisitedMap() {
@@ -244,19 +236,14 @@ void HNSWIndex::insert(int id, float *data) {
     int ins_level = getRandomLevel();
     if (ins_level > max_level) {
         for (cur_level = ins_level; cur_level > max_level; cur_level--) {
-            VertexPtr q_ptr = makeVertex(id, data);
-            if ((!root) != (above == nullptr)) { [[unlikely]]
-                throw std::runtime_error("root existing should match above existing");
-            }
+            VertexPtr q_ptr = makeVertex(id, data, cur_level);
+            assert((!root) == (above == nullptr));
             if (!root) root = q_ptr;
             if (above) above->below = q_ptr;
             above = &get(q_ptr);
         }
     } else {
-        if (!entry) { [[unlikely]]
-            throw std::runtime_error("assertion failure:"
-                " entry should exist if ins_level <= max_level");
-        }
+        assert(entry);
     }
     if (entry) {
         PQElement ep1(computeDistance(get(entry).data, data), entry);
@@ -269,38 +256,34 @@ void HNSWIndex::insert(int id, float *data) {
         cur_level = std::min(ins_level, cur_level);
     }
     for (; cur_level >= 0; cur_level--) {
-        VertexPtr q_ptr = makeVertex(id, data);
+        VertexPtr q_ptr = makeVertex(id, data, cur_level);
         if (above) above->below = q_ptr;
         Vertex &q = get(q_ptr);
         ep = searchLayer(data, std::move(ep), efConstruction);
         int M = cur_level == 0 ? 2 * maxDegree : maxDegree;
         auto neighbors = selectNeighbors(ep.elements(), M);
+        assert((size_t) q.numNeighbors == 0);
         for (auto &n : neighbors) {
-            q.neighbors = makeLink(n.vertex, q.neighbors);
+            pushNeighbor(q_ptr, n.vertex);
         }
-        q.numNeighbors = neighbors.size();
+        assert((size_t) q.numNeighbors == neighbors.size());
         for (auto &n : neighbors) {
             Vertex &e = get(n.vertex);
             if (e.numNeighbors < M) {
-                e.neighbors = makeLink(q_ptr, e.neighbors);
-                e.numNeighbors++;
+                pushNeighbor(n.vertex, q_ptr);
                 continue;
             }
             std::vector<PQElement> temp;
-            for (LinkPtr l = e.neighbors; l; l = get(l).next) {
-                VertexPtr v = get(l).vertex;
+            for (VertexPtr v : getNeighbors(n.vertex)) {
                 temp.emplace_back(computeDistance(get(v).data, e.data), v);
             }
             temp.emplace_back(n.dist, q_ptr);
             auto new_neighbors = selectNeighbors(std::move(temp), M);
-            auto it = new_neighbors.rbegin();
-            auto it_end = new_neighbors.rend();
-            LinkPtr *l = &e.neighbors;
-            for (; it != it_end; ++it, l = &get(*l).next) {
-                get(*l).vertex = it->vertex;
-            }
-            release(l);
             e.numNeighbors = new_neighbors.size();
+            auto en = getNeighbors(n.vertex);
+            for (int i = 0; i < (int) new_neighbors.size(); i++) {
+                en[i] = new_neighbors[i].vertex;
+            }
         }
         above = &q;
         ep.lower(this);
@@ -327,9 +310,7 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
         if (cur.dist > farthest_dist) {
             break;
         }
-        for (LinkPtr l = get(cur.vertex).neighbors; l; l = get(l).next) {
-            Link &link = get(l);
-            VertexPtr e = link.vertex;
+        for (VertexPtr e : getNeighbors(cur.vertex)) {
             int id = get(e).id;
             if (visited[id]) continue;
             visited.set(id);
@@ -365,9 +346,7 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
         if (cur.dist > nearest.dist) {
             break;
         }
-        for (LinkPtr l = get(cur.vertex).neighbors; l; l = get(l).next) {
-            Link &link = get(l);
-            VertexPtr e = link.vertex;
+        for (VertexPtr e : getNeighbors(cur.vertex)) {
             int id = get(e).id;
             if (visited[id]) continue;
             visited.set(id);
@@ -402,6 +381,7 @@ std::vector<PQElement> HNSWIndex::selectNeighbors(std::vector<PQElement> candida
         if (ok) {
             candidates[o] = std::move(candidates[i]);
             o++;
+            if (o >= M) break;
         }
     }
     candidates.erase(candidates.begin() + o, candidates.end());

@@ -8,7 +8,7 @@ DEPS := $(SRCS:%.cpp=deps/%.d)
 
 CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
 # CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra
-CPPFLAGS :=
+CPPFLAGS := -DNDEBUG
 LDFLAGS := -g
 
 ifeq ($(PLATFORM),win32)

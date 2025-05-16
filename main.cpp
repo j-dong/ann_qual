@@ -4,10 +4,10 @@
 #include "kernel_pq.h"
 #include "kernel_hnsw.h"
 #include "kernel_vamana.h"
-#include "timer.h"
 #include "simd_utils.h"
 
 #include <iostream>
+#include <iomanip>
 #include <vector>
 
 #include "argparse/argparse.hpp"
@@ -111,7 +111,7 @@ int main(int argc, char **argv) {
         }
 
         std::cout << std::endl;
-        std::cout << "recall@" << k << ": "
+        std::cout << "recall@" << k << ": " << std::setprecision(6)
             << (double) recall / data_query.length << std::endl;
     }
 
