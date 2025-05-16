@@ -6,19 +6,21 @@ SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp k
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
+CXXFLAGS := -O3 -std=c++20 -fopenmp -g -march=znver2 -Wall -Wextra
 # CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra
 CPPFLAGS := -DNDEBUG
-LDFLAGS := -g
+LDFLAGS := -g -fopenmp
 
 ifeq ($(PLATFORM),win32)
 	EXESUFF := .exe
 	EXTRA_OBJS := plat_win32/manifest.o
-	CPPFLAGS += -I"$(HOME)/Downloads/Tools/blis-5.0/include/zen2"
+	CPPFLAGS += -isystem "$(HOME)/Downloads/Tools/blis-5.0/include/zen2"
 	LDFLAGS += -L"$(HOME)/Downloads/Tools/blis-5.0/lib/zen2"
-	LIBS := -lblis
+	CPPFLAGS += -DBLAS_BLIS
+	LIBS := -lblis-mt
 else
 	EXESUFF :=
+	CPPFLAGS += -DBLAS_OPENBLAS
 	LIBS := -lblas
 endif
 

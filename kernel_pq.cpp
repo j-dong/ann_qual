@@ -7,7 +7,8 @@
 #ifndef NOMINMAX
 # define NOMINMAX 1
 #endif
-#include "cblas.h"
+#include <cblas.h>
+#include "control_threading.h"
 
 #include <cstring>
 #include <random>
@@ -162,6 +163,9 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
             (size_t) subcodebook_size *
             group_dim
         );
+        disable_blas_threading();
+#pragma omp parallel
+        {
         box<float[]> sub_biases = std::make_unique<float[]>(
             ret->num_groups
             * learn->length
@@ -174,6 +178,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 sub_biases[i + g * learn->length] += -0.5 * vec[j] * vec[j];
             }
         }
+#pragma omp for
         for (int i = 0; i < ret->num_groups; i++) {
             int start_dim = i * group_dim;
             int cur_dim = std::min(group_dim, dim - start_dim);
@@ -187,6 +192,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 &ret->codebooks[i * (size_t) subcodebook_size * group_dim],
                 nullptr
             );
+        }
         }
     }
     {
@@ -235,7 +241,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         int group_dim = (dim + ret->num_groups - 1) / ret->num_groups;
         box<float[]> sub_biases = std::make_unique<float[]>(vectors->length);
         box<float[]> sub_iprods = std::make_unique<float[]>(subcodebook_size * BLOCK_SIZE);
-        box<int[]> sub_assignments = std::make_unique<int[]>(vectors->length);
         int group_size = byte_size(ret->fine_bits);
         int qvec_size = roundup_line(group_size * ret->num_groups);
         ret->clustered_quant = std::unique_ptr<char[], aligned_deleter>(
@@ -253,8 +258,10 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 }
             }
         }
-        box<float[]> qerr = std::make_unique<float[]>(vectors->length);
-        box<float[]> qtemp = std::make_unique<float[]>(dim);
+#pragma omp parallel
+        {
+        box<int[]> sub_assignments = std::make_unique<int[]>(vectors->length);
+#pragma omp for
         for (int i = 0; i < ret->num_groups; i++) {
             int start_dim = i * group_dim;
             int cur_dim = std::min(group_dim, dim - start_dim);
@@ -289,6 +296,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 i,
                 ret->clustered_quant.get()
             );
+        }
         }
     }
     ret->bias = std::move(out_bias);
@@ -608,12 +616,14 @@ void generate_transform(float *mat, int dim) {
 
 template<int G>
 void write_bytes(char *out, int x) {
+#pragma omp critical
     memcpy(out, &x, G);
 }
 
 template<int G>
 int read_bytes(char *in) {
     int x = 0;
+#pragma omp critical
     memcpy(&x, in, G);
     return x;
 }

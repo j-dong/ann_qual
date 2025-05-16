@@ -9,6 +9,7 @@
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include "control_threading.h"
 
 #include "argparse/argparse.hpp"
 
@@ -82,6 +83,8 @@ int main(int argc, char **argv) {
         }
         handled = true;
 
+        enable_blas_threading();
+
         auto index = funcs[ki].preprocess(
             true,
             &data_base,
@@ -93,6 +96,8 @@ int main(int argc, char **argv) {
 
         std::vector<int> result;
         result.resize((size_t) k * data_query.length);
+
+        disable_blas_threading();
 
         funcs[ki].compute_many(
             &data_base,
