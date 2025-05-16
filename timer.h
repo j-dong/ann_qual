@@ -11,6 +11,9 @@ public:
     ScopedTimer(const char *name, int index);
     ScopedTimer(const char *name) : ScopedTimer(name, -1) {}
     ~ScopedTimer();
+
+    double get_ms();
+    void print_timer_message(const char *message, int index, double ms);
 };
 
 template<>

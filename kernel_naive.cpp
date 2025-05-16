@@ -8,6 +8,14 @@
 #include <algorithm>
 #include <cstring>
 
+#include "argparse/argparse.hpp"
+#include "timer.h"
+
+void make_arg_parser_naive(argparse::ArgumentParser &parser) {
+    // no arguments
+    (void) parser;
+}
+
 namespace {
 class NaiveIndex : public Index {
 public:
@@ -16,7 +24,8 @@ public:
 };
 }
 
-std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, [[maybe_unused]] RawVectorData *learn) {
+std::unique_ptr<Index> preprocess_ann_naive(bool is_l2, RawVectorData *vectors, [[maybe_unused]] RawVectorData *learn, [[maybe_unused]] argparse::ArgumentParser &parser) {
+    ScopedTimer timer("index construction");
     auto ret = std::make_unique<NaiveIndex>();
     ret->data = preprocess_l2_bias(is_l2, vectors);
     return ret;

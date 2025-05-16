@@ -44,28 +44,30 @@ IntVectorData data_ground;
 
 static FileMappingData mapping_data[4];
 
-void load_vector(const char *fname, RawVectorData *data, FileMappingData *map) {
-    data->filestart = map_file(fname, map, &data->filesize);
+void load_vector(const std::string &path_prefix, const char *fname, RawVectorData *data, FileMappingData *map) {
+    std::string path = path_prefix + fname;
+    data->filestart = map_file(path.c_str(), map, &data->filesize);
     data->vec = (float *) data->filestart;
     data->dim = *(int *) data->filestart;
     data->length = (int) (data->filesize / 4 / (1 + data->dim));
 }
 
-void load_vector(const char *fname, IntVectorData *data, FileMappingData *map) {
-    data->filestart = map_file(fname, map, &data->filesize);
+void load_vector(const std::string &path_prefix, const char *fname, IntVectorData *data, FileMappingData *map) {
+    std::string path = path_prefix + fname;
+    data->filestart = map_file(path.c_str(), map, &data->filesize);
     data->vec = (int *) data->filestart;
     data->dim = *(int *) data->filestart;
     data->length = (int) (data->filesize / 4 / (1 + data->dim));
 }
 
-void load_files() {
-    load_vector(PATH_PREFIX "_base.fvecs", &data_base, &mapping_data[0]);
+void load_files(std::string path_prefix) {
+    load_vector(path_prefix, "_base.fvecs", &data_base, &mapping_data[0]);
     try {
-        load_vector(PATH_PREFIX "_query.fvecs", &data_query, &mapping_data[1]);
+        load_vector(path_prefix, "_query.fvecs", &data_query, &mapping_data[1]);
         try {
-            load_vector(PATH_PREFIX "_learn.fvecs", &data_learn, &mapping_data[2]);
+            load_vector(path_prefix, "_learn.fvecs", &data_learn, &mapping_data[2]);
             try {
-                load_vector(PATH_PREFIX "_groundtruth.ivecs", &data_ground, &mapping_data[3]);
+                load_vector(path_prefix, "_groundtruth.ivecs", &data_ground, &mapping_data[3]);
             } catch (...) {
                 unmap_file(&mapping_data[2]);
                 throw;

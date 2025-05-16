@@ -20,6 +20,8 @@
 #include <stdexcept>
 #include <iostream>
 
+#include "argparse/argparse.hpp"
+
 namespace {
 struct Vertex {
     int numNeighbors = 0;
@@ -444,10 +446,32 @@ void VamanaIndex::refine(float alpha) {
 }
 
 
-std::unique_ptr<Index> preprocess_ann_vamana(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
+void make_arg_parser_vamana(argparse::ArgumentParser &parser) {
+    parser.add_argument("-R", "--max-degree")
+        .help("maximum degree of graph vertices (R)")
+        .default_value(128)
+        .scan<'d', int>();
+    parser.add_argument("-L", "--search-list-size")
+        .help("search list size (L)")
+        .default_value(256)
+        .scan<'d', int>();
+}
+
+std::unique_ptr<Index> preprocess_ann_vamana(bool is_l2, RawVectorData *vectors, RawVectorData *learn, argparse::ArgumentParser &parser) {
     if (!is_l2) throw std::runtime_error("we only support L2 for Vamana");
+
     (void) learn;
-    auto ret = std::make_unique<VamanaIndex>(128, 256, vectors);
+
+    int maxDegree =
+        parser.get<int>("--max-degree");
+    int L =
+        parser.get<int>("-L");
+
+    ScopedTimer timer("index construction");
+    auto ret = std::make_unique<VamanaIndex>(
+        maxDegree,
+        L,
+        vectors);
     {
         ScopedTimer timer("initialize to random");
         ret->initialize();

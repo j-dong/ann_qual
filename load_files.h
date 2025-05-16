@@ -1,4 +1,7 @@
+#pragma once
+
 #include <cstddef>
+#include <string>
 
 struct RawVectorData {
     void *filestart;
@@ -25,5 +28,5 @@ extern RawVectorData data_query;
 extern RawVectorData data_learn;
 extern IntVectorData data_ground;
 
-void load_files();
+void load_files(std::string path_prefix);
 void close_files();

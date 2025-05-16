@@ -113,3 +113,31 @@ float simd_l2dist(float *vec1, float *vec2, int dim) {
     }
     return sum;
 }
+
+bool simd_contains(int *arr, int N, int x) {
+    int i = 0;
+    for (; ((uintptr_t) &arr[i]) % 32; i++) {
+        if (arr[i] == x) return true;
+    }
+    __m256i v = _mm256_set1_epi32(x);
+    for (; i + 31 < N; i += 32) {
+        __m256i a = _mm256_load_si256((__m256i *) &arr[i]);
+        a = _mm256_cmpeq_epi32(v, a);
+        __m256i b = _mm256_load_si256((__m256i *) &arr[i + 8]);
+        b = _mm256_cmpeq_epi32(v, b);
+        __m256i c = _mm256_load_si256((__m256i *) &arr[i + 16]);
+        c = _mm256_cmpeq_epi32(v, c);
+        __m256i d = _mm256_load_si256((__m256i *) &arr[i + 24]);
+        d = _mm256_cmpeq_epi32(v, d);
+        __m256i ab = _mm256_or_si256(a, b);
+        __m256i cd = _mm256_or_si256(c, d);
+        __m256i abcd = _mm256_or_si256(ab, cd);
+        if (!_mm256_testz_si256(abcd, abcd)) {
+            return true;
+        }
+    }
+    for (; i < N; i++) {
+        if (arr[i] == x) return true;
+    }
+    return false;
+}

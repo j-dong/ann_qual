@@ -17,6 +17,8 @@
 #include <stdexcept>
 #include <iostream>
 
+#include "argparse/argparse.hpp"
+
 struct HNSWIndex;
 void *resolveVertex(HNSWIndex *, uint32_t);
 
@@ -184,13 +186,33 @@ inline void *resolveVertex(HNSWIndex *idx, uint32_t p) {
 }
 
 
+void make_arg_parser_hnsw(argparse::ArgumentParser &parser) {
+    parser.add_argument("-M", "--max-degree")
+        .help("maximum degree for graph vertices (M_max); doubled for layer 0")
+        .default_value(32)
+        .scan<'d', int>();
+    parser.add_argument("--ef-construction")
+        .help("exploration factor used during index construction")
+        .default_value(128)
+        .scan<'d', int>();
+}
 
-std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
+std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, RawVectorData *learn, argparse::ArgumentParser &parser) {
     if (!is_l2) {
         throw std::runtime_error("we only support L2 for HNSW");
     }
     (void) learn;
-    auto ret = std::make_unique<HNSWIndex>(vectors->dim, vectors->length, 32, 128);
+    int maxDegree =
+        parser.get<int>("--max-degree");
+    int efConstruction =
+        parser.get<int>("--ef-construction");
+
+    ScopedTimer timer("index construction");
+    auto ret = std::make_unique<HNSWIndex>(
+        vectors->dim, vectors->length,
+        maxDegree,
+        efConstruction
+    );
     for (int i = 0; i < vectors->length; i++) {
         if (i % 1000 == 0) {
             std::cout << "insert progress: " << i << "/" << vectors->length << std::endl;
@@ -204,7 +226,7 @@ std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, R
 int compute_ann_hnsw(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
     (void) vectors;
     HNSWIndex *index = (HNSWIndex *) raw_index;
-    auto vec = index->query(query, k, std::max(10, k));
+    auto vec = index->query(query, k, k);
     for (int i = 0; i < (int) vec.size(); i++) {
         result[i] = index->get(vec[i].vertex).id;
     }

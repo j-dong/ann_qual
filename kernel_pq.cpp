@@ -14,6 +14,8 @@
 #include <iostream>
 #include <numeric>
 
+#include "argparse/argparse.hpp"
+
 template<class T>
 using box = std::unique_ptr<T>;
 
@@ -100,18 +102,45 @@ static void generate_transform(float *mat, int dim);
 static void write_assignments(int num_vectors, int *assignments, int *gather, int bits, int num_groups, int dim_i, char *out);
 static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx);
 
-box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *learn) {
+void make_arg_parser_pq(argparse::ArgumentParser &parser) {
+    parser.add_argument("-k", "--num-clusters")
+        .help("number of clusters in coarse quantizer (k')")
+        .default_value(8192)
+        .scan<'d', int>();
+    parser.add_argument("-b", "--fine-bits")
+        .help("number of bits per subvector in fine quantizer (log_2 k* / m)")
+        .default_value(8)
+        .scan<'d', int>();
+    parser.add_argument("-m", "--num-groups")
+        .help("number of subvectors in fine quantizer (m)")
+        .default_value(8)
+        .scan<'d', int>();
+    parser.add_argument("-w", "--window-size")
+        .help("window size when performing search (w)")
+        .default_value(64)
+        .scan<'d', int>();
+    parser.add_argument("--full")
+        .help("train quantizers on full dataset")
+        .flag();
+}
+
+box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *learn, argparse::ArgumentParser &parser) {
     box<PQIndex> ret = std::make_unique<PQIndex>();
     int dim = vectors->dim;
     ret->dim = dim;
+    if (parser["--full"] == true) {
+        learn = vectors;
+    }
     auto learn_bias = preprocess_l2_bias(true, learn);
     auto force_bias = preprocess_l2_bias(true, vectors);
     auto out_bias = is_l2 ? std::make_unique<float[]>(vectors->length) : nullptr;
     // ret->num_clusters = (int) std::sqrt(learn->length);
-    ret->num_clusters = 8192;
-    ret->window = 64;
-    ret->fine_bits = 8;
-    ret->num_groups = 16;
+    ret->num_clusters = parser.get<int>("--num-clusters");
+    ret->window = parser.get<int>("--window-size");
+    ret->fine_bits = parser.get<int>("--fine-bits");
+    ret->num_groups = parser.get<int>("--num-groups");
+
+    ScopedTimer construct_timer("index construction");
     // ret->num_clusters = 128;
     // ret->num_clusters = 8192;
     box<int[]> learn_assignments;

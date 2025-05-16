@@ -6,8 +6,8 @@ SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp k
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-# CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
-CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra
+CXXFLAGS := -O3 -std=c++20 -g -march=znver2 -Wall -Wextra
+# CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra
 CPPFLAGS :=
 LDFLAGS := -g
 
