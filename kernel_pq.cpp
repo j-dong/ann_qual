@@ -142,8 +142,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     ret->num_groups = parser.get<int>("--num-groups");
 
     ScopedTimer construct_timer("index construction");
-    // ret->num_clusters = 128;
-    // ret->num_clusters = 8192;
     box<int[]> learn_assignments;
     {
         ScopedTimer timer("train coarse quantizer");
@@ -194,6 +192,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
             );
         }
         }
+        enable_blas_threading();
     }
     {
         ScopedTimer timer("quantize vectors");
@@ -239,8 +238,6 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
         );
         int subcodebook_size = 1 << ret->fine_bits;
         int group_dim = (dim + ret->num_groups - 1) / ret->num_groups;
-        box<float[]> sub_biases = std::make_unique<float[]>(vectors->length);
-        box<float[]> sub_iprods = std::make_unique<float[]>(subcodebook_size * BLOCK_SIZE);
         int group_size = byte_size(ret->fine_bits);
         int qvec_size = roundup_line(group_size * ret->num_groups);
         ret->clustered_quant = std::unique_ptr<char[], aligned_deleter>(
@@ -261,6 +258,8 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
 #pragma omp parallel
         {
         box<int[]> sub_assignments = std::make_unique<int[]>(vectors->length);
+        box<float[]> sub_biases = std::make_unique<float[]>(vectors->length);
+        box<float[]> sub_iprods = std::make_unique<float[]>(subcodebook_size * BLOCK_SIZE);
 #pragma omp for
         for (int i = 0; i < ret->num_groups; i++) {
             int start_dim = i * group_dim;
@@ -287,6 +286,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
                 nullptr,
                 nullptr
             );
+#pragma omp critical
             write_assignments(
                 vectors->length,
                 sub_assignments.get(),
@@ -616,14 +616,12 @@ void generate_transform(float *mat, int dim) {
 
 template<int G>
 void write_bytes(char *out, int x) {
-#pragma omp critical
     memcpy(out, &x, G);
 }
 
 template<int G>
 int read_bytes(char *in) {
     int x = 0;
-#pragma omp critical
     memcpy(&x, in, G);
     return x;
 }
