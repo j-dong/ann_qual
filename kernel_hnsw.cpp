@@ -177,6 +177,7 @@ struct HNSWIndex : Index {
 
     void insert(int id, float *data);
     max_heap searchLayer(float *data, max_heap ep, int ef);
+    PQElement searchLayer1(float *data, PQElement ep);
     std::vector<PQElement> selectNeighbors(std::vector<PQElement> candidates, int M);
     std::vector<PQElement> query(float *data, int k, int ef);
 };
@@ -257,10 +258,15 @@ void HNSWIndex::insert(int id, float *data) {
                 " entry should exist if ins_level <= max_level");
         }
     }
-    if (entry) pushq(ep, entry, data);
-    for (; cur_level > ins_level; cur_level--) {
-        ep = searchLayer(data, std::move(ep), 1);
-        ep.lower(this);
+    if (entry) {
+        PQElement ep1(computeDistance(get(entry).data, data), entry);
+        for (; cur_level > ins_level; cur_level--) {
+            ep1 = searchLayer1(data, std::move(ep1));
+            ep1.vertex = get(ep1.vertex).below;
+        }
+        ep.push(std::move(ep1));
+    } else {
+        cur_level = std::min(ins_level, cur_level);
     }
     for (; cur_level >= 0; cur_level--) {
         VertexPtr q_ptr = makeVertex(id, data);
@@ -307,6 +313,8 @@ void HNSWIndex::insert(int id, float *data) {
 }
 
 max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
+    if (ep.empty()) return ep;
+
     VisitedMap visited = takeVisitedMap();
 
     min_heap candidates(ep);
@@ -329,9 +337,46 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
             if (dist < farthest_dist || candidates.size() < (size_t) ef) {
                 pushq(candidates, e, dist);
                 if (nearest.size() >= (size_t) ef) {
-                    nearest.pop();
+                    if (dist < farthest_dist) {
+                        nearest.pop();
+                        pushq(nearest, e, dist);
+                        farthest_dist = nearest.top().dist;
+                    }
+                } else {
+                    pushq(nearest, e, dist);
+                    farthest_dist = nearest.top().dist;
                 }
-                pushq(nearest, e, dist);
+            }
+        }
+    }
+
+    return nearest;
+}
+
+PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
+    VisitedMap visited = takeVisitedMap();
+
+    min_heap candidates; candidates.push(ep);
+    PQElement nearest = ep;
+
+    while (!candidates.empty()) {
+        PQElement cur = candidates.top();
+        candidates.pop();
+        if (cur.dist > nearest.dist) {
+            break;
+        }
+        for (LinkPtr l = get(cur.vertex).neighbors; l; l = get(l).next) {
+            Link &link = get(l);
+            VertexPtr e = link.vertex;
+            int id = get(e).id;
+            if (visited[id]) continue;
+            visited.set(id);
+            float dist = computeDistance(get(e).data, data);
+            if (dist < nearest.dist || candidates.empty()) {
+                pushq(candidates, e, dist);
+                if (dist < nearest.dist) {
+                    nearest = PQElement(dist, e);
+                }
             }
         }
     }
@@ -364,13 +409,14 @@ std::vector<PQElement> HNSWIndex::selectNeighbors(std::vector<PQElement> candida
 }
 
 std::vector<PQElement> HNSWIndex::query(float *data, int k, int ef) {
-    max_heap ep;
-    pushq(ep, entry, data);
+    PQElement ep1(computeDistance(get(entry).data, data), entry);
     int cur_level = max_level;
     for (; cur_level > 0; cur_level--) {
-        ep = searchLayer(data, std::move(ep), 1);
-        ep.lower(this);
+        ep1 = searchLayer1(data, std::move(ep1));
+        ep1.vertex = get(ep1.vertex).below;
     }
+    max_heap ep;
+    ep.push(std::move(ep1));
     max_heap nearest = searchLayer(data, std::move(ep), ef);
     while (nearest.size() > (size_t) k) {
         nearest.pop();
