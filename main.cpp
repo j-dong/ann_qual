@@ -131,7 +131,7 @@ int main(int argc, char **argv) {
             );
         }
 
-        std::string out_fn = funcs[ki].out_fn(index.get(), parsers[ki]);
+        std::string out_fn = funcs[ki].out_fn(index.get(), &parsers[ki]);
         std::ofstream f(out_fn, std::ios::binary);
         f.write((const char *) result.data(), (size_t) k * (size_t) data_query.length);
         std::cout << "k-ANN output written to: " << out_fn << std::endl;

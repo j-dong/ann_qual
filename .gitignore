@@ -7,3 +7,4 @@
 /plat.mk
 *.dll
 /out_*
+/hopdist_*

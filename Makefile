@@ -6,9 +6,9 @@ SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp k
 OBJS := $(SRCS:%.cpp=objs/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-CXXFLAGS := -O3 -std=c++20 -fopenmp -g -march=znver2 -Wall -Wextra
+CXXFLAGS := -O3 -std=c++20 -fopenmp -g -march=native -Wall -Wextra
 CPPFLAGS := -DNDEBUG
-# CXXFLAGS := -std=c++20 -g -march=znver2 -Wall -Wextra -fopenmp
+# CXXFLAGS := -std=c++20 -g -march=native -Wall -Wextra -fopenmp
 # CPPFLAGS :=
 LDFLAGS := -g -fopenmp
 
@@ -17,12 +17,16 @@ ifeq ($(PLATFORM),win32)
 	EXTRA_OBJS := plat_win32/manifest.o
 	CPPFLAGS += -isystem "$(HOME)/Downloads/Tools/blis-5.0/include/zen2"
 	LDFLAGS += -L"$(HOME)/Downloads/Tools/blis-5.0/lib/zen2"
-	CPPFLAGS += -DBLAS_BLIS
+	CPPFLAGS +=
 	LIBS := -lblis-mt
+else ifeq ($(BLAS),mkl)
+	EXESUFF :=
+	CPPFLAGS +=
+	LIBS := -Wl,--no-as-needed -lmkl_intel_lp64 -lmkl_gnu_thread -lmkl_core -lgomp -lpthread -lm -ldl
 else
 	EXESUFF :=
-	CPPFLAGS += -DBLAS_OPENBLAS
-	LIBS := -lblas
+	CPPFLAGS +=
+	LIBS := -lopenblas
 endif
 
 test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/kernel_hnsw.o objs/kernel_vamana.o objs/timer.o objs/kernel_utils.o objs/simd_utils.o $(EXTRA_OBJS)
@@ -44,6 +48,10 @@ plat.mk:
 	echo "int main() {}" >>detect/test_win32.cpp
 	$(CXX) -o /dev/null detect/test_win32.cpp 2>/dev/null 1>&2 && echo 'PLATFORM := linux' >plat.mk || echo 'PLATFORM := win32' >plat.mk
 	rm detect/test_win32.cpp
+	echo "#include <mkl.h>" >detect/test_mkl.cpp
+	echo "int main() {}" >>detect/test_mkl.cpp
+	$(CXX) -o /dev/null detect/test_mkl.cpp -lmkl_core 2>/dev/null 1>&2 && echo 'BLAS := mkl' >>plat.mk
+	rm detect/test_mkl.cpp
 	rmdir detect
 
 clean:

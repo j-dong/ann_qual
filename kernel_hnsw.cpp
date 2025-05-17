@@ -298,7 +298,7 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
         if (cur.dist > farthest_dist) {
             break;
         }
-        total_hops++;
+        num_hops++;
         if constexpr (Threaded) {
             SHARED_LOCK_TY(std::shared_mutex) COND_LOCK(*neighbor_mutexes[cur.vertex.i]);
             auto span = getNeighbors(cur.vertex);
@@ -347,7 +347,7 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
         if (cur.dist > nearest.dist) {
             break;
         }
-        total_hops++;
+        num_hops++;
         if constexpr (Threaded) {
             SHARED_LOCK_TY(std::shared_mutex) COND_LOCK(*neighbor_mutexes[cur.vertex.i]);
             auto span = getNeighbors(cur.vertex);

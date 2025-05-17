@@ -24,12 +24,17 @@
 #include "argparse/argparse.hpp"
 
 #ifdef _OPENMP
+# include <atomic>
 # include <mutex>
+# include <shared_mutex>
+# define WITH_SHARED_LOCK(mutex) std::shared_lock my_lock(mutex)
+# define WITH_SHARED_LOCK_2(mutex) std::shared_lock my_lock_2(mutex)
+# define WITH_UNIQUE_LOCK(mutex) std::unique_lock my_lock(mutex)
+# define WITH_UNIQUE_LOCK_2(mutex) std::unique_lock my_lock_2(mutex)
 # define DEFAULT_THREADED true
 # define UNIQUE_LOCK(Ty) std::unique_lock<Ty>
 # define UNIQUE_LOCK_TY(Ty) std::unique_lock<Ty>
 # define SHARED_LOCK_TY(Ty) std::unique_lock<Ty>
-# define MUTEX_T std::mutex
 #else
 # define DEFAULT_THREADED false
 # define UNIQUE_LOCK_TY(Ty) void
@@ -305,7 +310,11 @@ struct VamanaIndex : Index {
 
     void initialize();
     std::vector<PQElement> greedySearch(float *data, int k);
-    PQElement greedySearch(VertexPtr p, std::vector<PQElement> &out_visited);
+    PQElement greedySearch(VertexPtr p, std::vector<PQElement> &out_visited
+#ifdef _OPENMP
+                           , std::shared_mutex *mutexes
+#endif
+    );
     void robustPrune(VertexPtr p, std::vector<PQElement> &out, float alpha);
     void refine(float alpha);
 };
@@ -386,11 +395,23 @@ std::vector<PQElement> VamanaIndex::greedySearch(float *data, int k) {
     return std::vector(search_list.begin(), search_list.end_or(k));
 }
 
-PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_visited) {
+PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_visited
+#ifdef _OPENMP
+                           , std::shared_mutex *mutexes
+#endif
+) {
     float *data = get(p).data;
     bounded_pq search_list(L);
     search_list.emplace_empty(computeDistance(get(entry).data, data), entry);
     VisitedMap visited = takeVisitedMap();
+
+#ifdef _OPENMP
+        std::vector<VertexPtr> the_neighbors;
+        the_neighbors.reserve(maxDegree);
+#else
+        std::span<VertexPtr> the_neighbors;
+#endif
+
     // +0 -> visited
     // +1 -> inserted, p's neighbor
     // +2 -> inserted
@@ -404,11 +425,22 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
             out_visited.push_back(cur);
         }
         visited.set(cur.vertex.i);
-        search_list.reserve_more(neighbors(cur.vertex).size());
+
+#if _OPENMP
+        {
+            std::shared_lock cur_lock((mutexes[cur.vertex.i]));
+            auto span = neighbors(cur.vertex);
+            the_neighbors.assign(span.begin(), span.end());
+        }
+#else
+        the_neighbors = neighbors(cur.vertex);
+#endif
+
+        search_list.reserve_more(the_neighbors.size());
         auto ins = search_list.do_insert();
         if (p == cur.vertex) {
             found_p = true;
-            for (auto n : neighbors(cur.vertex)) {
+            for (auto n : the_neighbors) {
                 auto nt = visited.vec[n.i];
                 if (nt == visited.tag || nt == visited.tag + 1) continue;
                 visited.vec[n.i] = visited.tag + 1;
@@ -418,7 +450,7 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
                 ins.emplace_unchecked(dist, n);
             }
         } else {
-            for (auto n : neighbors(cur.vertex)) {
+            for (auto n : the_neighbors) {
                 if (visited[n.i] || visited.vec[n.i] == visited.tag + 1 || visited.vec[n.i] == visited.tag + 2) continue;
                 ins.emplace_unchecked(computeDistance(get(n).data, data), n);
                 visited.vec[n.i] = visited.tag + 2;
@@ -426,6 +458,9 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
         }
     }
     if (!found_p) {
+#ifdef _OPENMP
+        std::shared_lock p_lock(mutexes[p.i]);
+#endif
         for (auto n : neighbors(p)) {
             if (visited[n.i]) continue;
             float dist = computeDistance(get(n).data, data);
@@ -468,8 +503,7 @@ void VamanaIndex::robustPrune(VertexPtr p, std::vector<PQElement> &out, float al
 #ifdef _OPENMP
 
 void VamanaIndex::refine(float alpha) {
-    constexpr int BLOCK_SIZE = 1000;
-    if (visit_order.empty()) {
+    {
         ScopedTimer timer("shuffle visit order");
         visit_order.resize(maxVertices);
         for (int i = 0; i < maxVertices; i++) {
@@ -477,75 +511,51 @@ void VamanaIndex::refine(float alpha) {
         }
         std::shuffle(visit_order.begin(), visit_order.end(), rng);
     }
-    std::vector<int> new_numNeighbors;
-    std::vector<VertexPtr> new_neighbors;
-    std::unique_ptr<MUTEX_T[]> mutexes = std::make_unique<std::mutex[]>(
+    std::unique_ptr<std::shared_mutex[]> mutexes = std::make_unique<std::shared_mutex[]>(
         maxVertices
     );
-    new_numNeighbors.resize(BLOCK_SIZE);
-    new_neighbors.resize(BLOCK_SIZE * maxDegree);
-    std::unique_ptr<std::pair<VertexPtr, PQElement>[], ManualDeleter>
-        back_edges = std::unique_ptr<std::pair<VertexPtr, PQElement>[], ManualDeleter>(
-            (std::pair<VertexPtr, PQElement> *)(operator new[](
-                    sizeof back_edges[0] * BLOCK_SIZE * maxDegree)),
-            ManualDeleter()
-        );
-    size_t num_back_edges = 0;
+    std::atomic<int> total_progress = 0;
 #pragma omp parallel
     {
     std::vector<PQElement> p_visited;
     std::vector<PQElement> temp_neighbors;
     p_visited.reserve(L * 2);
     temp_neighbors.reserve(maxDegree + 1);
-    for (size_t block_start = 0; block_start < visit_order.size(); block_start += BLOCK_SIZE) {
-#pragma omp single
-        {
-            std::cout << "refine (alpha=" << alpha << ") progress: " << block_start << "/" << visit_order.size() << std::endl;
-            num_back_edges = 0;
-        }
-        size_t block_end = std::min(block_start + BLOCK_SIZE, visit_order.size());
-        size_t block_size = block_end - block_start;
+    int my_progress;
 #pragma omp for
-        for (size_t bi = 0; bi < block_size; bi++) {
-            size_t vi = block_start + bi;
-            VertexPtr p = visit_order[vi];
-            p_visited.clear();
-            greedySearch(p, p_visited);
-            robustPrune(p, p_visited, alpha);
-            new_numNeighbors[bi] = p_visited.size();
+    for (size_t vi = 0; vi < visit_order.size(); vi++) {
+        if ((my_progress = total_progress.fetch_add(1)) % 1000 == 0) {
+#pragma omp critical
+            std::cout << "refine (alpha=" << alpha << ") progress: " << my_progress << "/" << visit_order.size() << std::endl;
+        }
+        VertexPtr p = visit_order[vi];
+        p_visited.clear();
+        greedySearch(p, p_visited
+#ifdef _OPENMP
+                     , mutexes.get()
+#endif
+        );
+        robustPrune(p, p_visited, alpha);
+        {
+            std::unique_lock p_lock(mutexes[p.i]);
+            get(p).numNeighbors = p_visited.size();
+            auto pn = neighbors(p);
             for (int i = 0; i < (int) p_visited.size(); i++) {
-                new_neighbors[bi * maxDegree + i] = p_visited[i].vertex;
-                size_t be_idx;
-#pragma omp atomic capture
-                be_idx = num_back_edges++;
-                back_edges[be_idx].first = p;
-                back_edges[be_idx].second = p_visited[i];
+                pn[i] = p_visited[i].vertex;
             }
         }
-#pragma omp for
-        for (size_t bi = 0; bi < block_size; bi++) {
-            size_t vi = block_start + bi;
-            VertexPtr p = visit_order[vi];
-            std::memcpy(&all_neighbors[p.i * maxDegree],
-                        &new_neighbors[bi * maxDegree],
-                        new_numNeighbors[bi] * sizeof(VertexPtr));
-            get(p).numNeighbors = new_numNeighbors[bi];
-        }
-#pragma omp for
-        for (size_t idx = 0; idx < num_back_edges; idx++) {
-            auto &be = back_edges[idx];
-            VertexPtr i = be.first;
-            VertexPtr j = be.second.vertex;
+        for (PQElement &je : p_visited) {
+            VertexPtr j = je.vertex;
             std::unique_lock j_lock(mutexes[j.i]);
             auto jn = neighbors(j);
             if ((int) jn.size() < maxDegree) {
-                push_neighbor(j, i);
+                push_neighbor(j, p);
             } else {
                 temp_neighbors.clear();
                 for (VertexPtr n : jn) {
                     temp_neighbors.emplace_back(computeDistance(get(n).data, get(j).data), n);
                 }
-                temp_neighbors.emplace_back(be.second.dist, i);
+                temp_neighbors.emplace_back(je.dist, p);
                 robustPrune(j, temp_neighbors, alpha);
                 assert((int) temp_neighbors.size() <= maxDegree);
                 get(j).numNeighbors = temp_neighbors.size();
