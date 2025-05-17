@@ -13,6 +13,7 @@
 #include <cstring>
 #include <random>
 #include <iostream>
+#include <sstream>
 #include <numeric>
 
 #include "argparse/argparse.hpp"
@@ -102,6 +103,15 @@ static box<float[]> transform_fine_vectors(RawVectorData *vectors, float *cluste
 static void generate_transform(float *mat, int dim);
 static void write_assignments(int num_vectors, int *assignments, int *gather, int bits, int num_groups, int dim_i, char *out);
 static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx);
+
+
+std::string out_fn_pq(Index *raw_index, argparse::ArgumentParser &parser) {
+    PQIndex *index = (PQIndex *) raw_index;
+    std::stringstream out;
+    out << "out_pq_k" << index->num_clusters << "_b" << index->fine_bits << "_m" << index->num_groups << "_w" << index->window;
+    if (parser["--full"] == true) out << "_full";
+    return out.str();
+}
 
 void make_arg_parser_pq(argparse::ArgumentParser &parser) {
     parser.add_argument("-k", "--num-clusters")

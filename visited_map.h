@@ -2,14 +2,15 @@
 
 #include <cstring>
 #include <vector>
+#include <cstdint>
 
 struct VisitedMap {
-    char *vec = nullptr;
+    uint8_t *vec = nullptr;
     char tag;
     bool cleared = false;
 
     VisitedMap(size_t size) {
-        vec = new char[size];
+        vec = new uint8_t[size];
     }
     VisitedMap(VisitedMap &&o) : vec(o.vec) {
         o.vec = nullptr;

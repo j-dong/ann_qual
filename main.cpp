@@ -7,6 +7,7 @@
 #include "simd_utils.h"
 
 #include <iostream>
+#include <fstream>
 #include <iomanip>
 #include <vector>
 #include "control_threading.h"
@@ -118,6 +119,11 @@ int main(int argc, char **argv) {
         std::cout << std::endl;
         std::cout << "recall@" << k << ": " << std::setprecision(6)
             << (double) recall / data_query.length << std::endl;
+
+        std::cout << std::endl;
+        std::string out_fn = funcs[ki].out_fn(index.get(), parsers[ki]);
+        std::ofstream f(out_fn, std::ios::binary);
+        f.write((const char *) result.data(), (size_t) k * (size_t) data_query.length);
     }
 
     if (!handled) {

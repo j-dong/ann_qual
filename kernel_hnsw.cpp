@@ -17,6 +17,7 @@
 #include <random>
 #include <stdexcept>
 #include <iostream>
+#include <sstream>
 #include <cassert>
 #include <span>
 
@@ -364,6 +365,12 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
 }
 
 
+std::string out_fn_hnsw(Index *raw_index, argparse::ArgumentParser &) {
+    HNSWIndex *index = (HNSWIndex *) raw_index;
+    std::stringstream out;
+    out << "out_hnsw_M" << index->maxDegree << "_efC" << index->efConstruction;
+    return out.str();
+}
 
 void make_arg_parser_hnsw(argparse::ArgumentParser &parser) {
     parser.add_argument("-M", "--max-degree")
@@ -506,6 +513,7 @@ void HNSWIndex::insert(int id, float *data) {
         assert((size_t) q.numNeighbors == 0);
         auto neighbors = selectNeighbors(ep.elements(), M);
         assert((size_t) q.numNeighbors == 0);
+        (void) q;
         for (auto &n : neighbors) {
             // safety: q is not yet in the graph
             pushNeighbor(q_ptr, n.vertex);

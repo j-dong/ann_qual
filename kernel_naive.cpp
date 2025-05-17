@@ -11,6 +11,10 @@
 #include "argparse/argparse.hpp"
 #include "timer.h"
 
+std::string out_fn_naive(Index *, argparse::ArgumentParser &) {
+    return "out_naive";
+}
+
 void make_arg_parser_naive(argparse::ArgumentParser &parser) {
     // no arguments
     (void) parser;

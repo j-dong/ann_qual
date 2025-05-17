@@ -22,6 +22,25 @@
 
 #include "argparse/argparse.hpp"
 
+#ifdef _OPENMP
+# include <mutex>
+# define DEFAULT_THREADED true
+# define UNIQUE_LOCK(Ty) std::unique_lock<Ty>
+# define UNIQUE_LOCK_TY(Ty) std::unique_lock<Ty>
+# define SHARED_LOCK_TY(Ty) std::unique_lock<Ty>
+# define MUTEX_T std::mutex
+#else
+# define DEFAULT_THREADED false
+# define UNIQUE_LOCK_TY(Ty) void
+# define UNIQUE_LOCK(Ty) UNIQUE_LOCK_M
+# define SHARED_LOCK_TY(Ty) UNIQUE_LOCK_M
+# define UNIQUE_LOCK_M(val) 0
+namespace {
+    template<typename T>
+    struct UNIQUE_LOCK_M {};
+}
+#endif
+
 namespace {
 struct Vertex {
     int numNeighbors = 0;
@@ -35,6 +54,19 @@ struct max_heap : vertex_heap<CompMaxDist> {
 };
 struct min_heap : vertex_heap<CompMinDist> {
     using vertex_heap<CompMinDist>::vertex_heap;
+};
+
+struct CompPairVPFirst {
+    using A = VertexPtr;
+    template<typename B>
+    bool operator()(const std::pair<A, B> &a, const std::pair<A, B> &b) const {
+        return a.first.i < b.first.i;
+    }
+};
+
+struct ManualDeleter {
+    template<typename T>
+    void operator()(T p[]) const { operator delete[](p); }
 };
 
 class bounded_pq;
@@ -206,6 +238,10 @@ struct VamanaIndex : Index {
     std::mt19937 rng;
     std::vector<VisitedMap> visited_pool;
 
+#ifdef _OPENMP
+    std::mutex visited_mutex;
+#endif
+
     VamanaIndex(int maxDegree, int L,
                 RawVectorData *data)
             : dim(data->dim), maxVertices(data->length), maxDegree(maxDegree), L(L), raw_data(data) {
@@ -232,11 +268,21 @@ struct VamanaIndex : Index {
         all_neighbors[maxDegree * p.i + get(p).numNeighbors++] = n;
     }
 
+    template<bool Threaded=DEFAULT_THREADED>
     VisitedMap takeVisitedMap() {
+        std::conditional_t<Threaded, UNIQUE_LOCK_TY(std::mutex), int> my_lock;
+        if constexpr (Threaded) {
+            my_lock = UNIQUE_LOCK(std::mutex)(visited_mutex);
+        } else { (void) my_lock; }
         return VisitedMap::takeFromPool(visited_pool, maxVertices);
     }
 
+    template<bool Threaded=DEFAULT_THREADED>
     void releaseVisitedMap(VisitedMap &&map) {
+        std::conditional_t<Threaded, UNIQUE_LOCK_TY(std::mutex), int> my_lock;
+        if constexpr (Threaded) {
+            my_lock = UNIQUE_LOCK(std::mutex)(visited_mutex);
+        } else { (void) my_lock; }
         visited_pool.push_back(std::move(map));
     }
 
@@ -313,7 +359,8 @@ void VamanaIndex::initialize() {
 std::vector<PQElement> VamanaIndex::greedySearch(float *data, int k) {
     bounded_pq search_list(L);
     search_list.emplace_empty(computeDistance(get(entry).data, data), entry);
-    VisitedMap visited = takeVisitedMap();
+    VisitedMap visited = takeVisitedMap<false>();
+    // use tag + 1 to store inserted
     while (!search_list.empty()) {
         PQElement cur = search_list.pop_min();
         if (visited[cur.vertex.i]) {
@@ -323,11 +370,13 @@ std::vector<PQElement> VamanaIndex::greedySearch(float *data, int k) {
         search_list.reserve_more(neighbors(cur.vertex).size());
         auto ins = search_list.do_insert();
         for (auto n : neighbors(cur.vertex)) {
-            if (visited[n.i]) continue;
+            if (visited[n.i] || visited.vec[n.i] == visited.tag + 1) continue;
             ins.emplace_unchecked(computeDistance(get(n).data, data), n);
+            visited.vec[n.i] = visited.tag + 1;
         }
     }
-    releaseVisitedMap(std::move(visited));
+    visited.reset(); // for extra +1
+    releaseVisitedMap<false>(std::move(visited));
     return std::vector(search_list.begin(), search_list.end_or(k));
 }
 
@@ -399,6 +448,102 @@ void VamanaIndex::robustPrune(VertexPtr p, std::vector<PQElement> &out, float al
     releaseVisitedMap(std::move(to_remove));
 }
 
+#ifdef _OPENMP
+
+void VamanaIndex::refine(float alpha) {
+    constexpr int BLOCK_SIZE = 1000;
+    if (visit_order.empty()) {
+        ScopedTimer timer("shuffle visit order");
+        visit_order.resize(maxVertices);
+        for (int i = 0; i < maxVertices; i++) {
+            visit_order[i].i = i;
+        }
+        std::shuffle(visit_order.begin(), visit_order.end(), rng);
+    }
+    std::vector<int> new_numNeighbors;
+    std::vector<VertexPtr> new_neighbors;
+    std::unique_ptr<MUTEX_T[]> mutexes = std::make_unique<std::mutex[]>(
+        maxVertices
+    );
+    new_numNeighbors.resize(BLOCK_SIZE);
+    new_neighbors.resize(BLOCK_SIZE * maxDegree);
+    std::unique_ptr<std::pair<VertexPtr, PQElement>[], ManualDeleter>
+        back_edges = std::unique_ptr<std::pair<VertexPtr, PQElement>[], ManualDeleter>(
+            (std::pair<VertexPtr, PQElement> *)(operator new[](
+                    sizeof back_edges[0] * BLOCK_SIZE * maxDegree)),
+            ManualDeleter()
+        );
+    size_t num_back_edges = 0;
+#pragma omp parallel
+    {
+    std::vector<PQElement> p_visited;
+    std::vector<PQElement> temp_neighbors;
+    p_visited.reserve(L * 2);
+    temp_neighbors.reserve(maxDegree + 1);
+    for (size_t block_start = 0; block_start < visit_order.size(); block_start += BLOCK_SIZE) {
+#pragma omp single
+        {
+            std::cout << "refine (alpha=" << alpha << ") progress: " << block_start << "/" << visit_order.size() << std::endl;
+            num_back_edges = 0;
+        }
+        size_t block_end = std::min(block_start + BLOCK_SIZE, visit_order.size());
+        size_t block_size = block_end - block_start;
+#pragma omp for
+        for (size_t bi = 0; bi < block_size; bi++) {
+            size_t vi = block_start + bi;
+            VertexPtr p = visit_order[vi];
+            p_visited.clear();
+            greedySearch(p, p_visited);
+            robustPrune(p, p_visited, alpha);
+            new_numNeighbors[bi] = p_visited.size();
+            for (int i = 0; i < (int) p_visited.size(); i++) {
+                new_neighbors[bi * maxDegree + i] = p_visited[i].vertex;
+                size_t be_idx;
+#pragma omp atomic capture
+                be_idx = num_back_edges++;
+                back_edges[be_idx].first = p;
+                back_edges[be_idx].second = p_visited[i];
+            }
+        }
+#pragma omp for
+        for (size_t bi = 0; bi < block_size; bi++) {
+            size_t vi = block_start + bi;
+            VertexPtr p = visit_order[vi];
+            std::memcpy(&all_neighbors[p.i * maxDegree],
+                        &new_neighbors[bi * maxDegree],
+                        new_numNeighbors[bi] * sizeof(VertexPtr));
+            get(p).numNeighbors = new_numNeighbors[bi];
+        }
+#pragma omp for
+        for (size_t idx = 0; idx < num_back_edges; idx++) {
+            auto &be = back_edges[idx];
+            VertexPtr i = be.first;
+            VertexPtr j = be.second.vertex;
+            std::unique_lock j_lock(mutexes[j.i]);
+            auto jn = neighbors(j);
+            if ((int) jn.size() < maxDegree) {
+                push_neighbor(j, i);
+            } else {
+                temp_neighbors.clear();
+                for (VertexPtr n : jn) {
+                    temp_neighbors.emplace_back(computeDistance(get(n).data, get(j).data), n);
+                }
+                temp_neighbors.emplace_back(be.second.dist, i);
+                robustPrune(j, temp_neighbors, alpha);
+                assert((int) temp_neighbors.size() <= maxDegree);
+                get(j).numNeighbors = temp_neighbors.size();
+                jn = neighbors(j);
+                for (int i = 0; i < (int) temp_neighbors.size(); i++) {
+                    jn[i] = temp_neighbors[i].vertex;
+                }
+            }
+        }
+    }
+    }
+}
+
+#else
+
 void VamanaIndex::refine(float alpha) {
     if (visit_order.empty()) {
         ScopedTimer timer("shuffle visit order");
@@ -418,9 +563,13 @@ void VamanaIndex::refine(float alpha) {
         }
         VertexPtr p = visit_order[vi];
         p_visited.clear();
-        auto pn = neighbors(p);
         greedySearch(p, p_visited);
         robustPrune(p, p_visited, alpha);
+        get(p).numNeighbors = (int) p_visited.size();
+        auto pn = neighbors(p);
+        for (int i = 0; i < (int) p_visited.size(); i++) {
+            pn[i] = p_visited[i].vertex;
+        }
         for (PQElement &je : p_visited) {
             VertexPtr j = je.vertex;
             auto jn = neighbors(j);
@@ -444,6 +593,15 @@ void VamanaIndex::refine(float alpha) {
     }
 }
 
+#endif
+
+
+std::string out_fn_vamana(Index *raw_index, argparse::ArgumentParser &) {
+    VamanaIndex *index = (VamanaIndex *) raw_index;
+    std::stringstream out;
+    out << "out_vamana_R" << index->maxDegree << "_L" << index->L;
+    return out.str();
+}
 
 void make_arg_parser_vamana(argparse::ArgumentParser &parser) {
     parser.add_argument("-R", "--max-degree")
