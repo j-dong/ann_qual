@@ -35,9 +35,11 @@ template<compute_decl Func> void compute_many(
     timer.print_timer_message("avg query latency", -1, total_ms / queries->length);
 }
 
+typedef void output_stats_decl(RawVectorData *vectors, int k, RawVectorData *queries, int *result, Index *index);
+
 typedef void make_arg_parser_decl(argparse::ArgumentParser &parser);
 
-typedef std::string out_fn_decl(Index *index, argparse::ArgumentParser &parser);
+typedef std::string out_fn_decl(Index *index, argparse::ArgumentParser *parser);
 
 struct KernelFuncs {
     const char *name;
@@ -46,6 +48,7 @@ struct KernelFuncs {
     compute_many_decl *compute_many;
     make_arg_parser_decl *make_arg_parser;
     out_fn_decl *out_fn;
+    output_stats_decl *output_stats;
 };
 
 typedef KernelFuncs get_funcs_decl();

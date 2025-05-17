@@ -17,6 +17,7 @@
 #include <random>
 #include <stdexcept>
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <cassert>
 #include <span>
@@ -107,6 +108,9 @@ struct HNSWIndex : Index {
     double m_L;
     int efConstruction;
 
+    std::vector<int> hop_list;
+    int num_hops;
+
     VertexPtr entry = nullptr;
     int max_level = -1;
 #ifdef _OPENMP
@@ -123,6 +127,8 @@ struct HNSWIndex : Index {
     HNSWIndex(int dim, int maxVertices, int maxDegree, int efConstruction)
             : dim(dim), maxVertices(maxVertices), maxDegree(maxDegree), m_L(1.0 / std::log((double) maxDegree)), efConstruction(efConstruction) {
         rng.seed(0xdeadbeef);
+
+        hop_list.reserve(10000);
 
 #ifdef _OPENMP
         neighbor_mutexes.reserve(2 * maxVertices);
@@ -292,6 +298,7 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
         if (cur.dist > farthest_dist) {
             break;
         }
+        total_hops++;
         if constexpr (Threaded) {
             SHARED_LOCK_TY(std::shared_mutex) COND_LOCK(*neighbor_mutexes[cur.vertex.i]);
             auto span = getNeighbors(cur.vertex);
@@ -340,6 +347,7 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
         if (cur.dist > nearest.dist) {
             break;
         }
+        total_hops++;
         if constexpr (Threaded) {
             SHARED_LOCK_TY(std::shared_mutex) COND_LOCK(*neighbor_mutexes[cur.vertex.i]);
             auto span = getNeighbors(cur.vertex);
@@ -365,7 +373,7 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
 }
 
 
-std::string out_fn_hnsw(Index *raw_index, argparse::ArgumentParser &) {
+std::string out_fn_hnsw(Index *raw_index, argparse::ArgumentParser *) {
     HNSWIndex *index = (HNSWIndex *) raw_index;
     std::stringstream out;
     out << "out_hnsw_M" << index->maxDegree << "_efC" << index->efConstruction;
@@ -432,11 +440,26 @@ std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, R
 int compute_ann_hnsw(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
     (void) vectors;
     HNSWIndex *index = (HNSWIndex *) raw_index;
+    index->num_hops = 0;
     auto vec = index->query(query, k, k);
     for (int i = 0; i < (int) vec.size(); i++) {
         result[i] = index->get(vec[i].vertex).id;
     }
+    index->hop_list.push_back(index->num_hops);
     return vec.size();
+}
+
+void output_stats_hnsw(RawVectorData *vectors, int k, RawVectorData *queries, int *result, Index *index) {
+    (void) vectors; (void) k; (void) result;
+    size_t total_hops = 0;
+    auto hop_list = static_cast<HNSWIndex *>(index)->hop_list;
+    for (int h : hop_list) total_hops += h;
+    std::cout << "[STATS] avg num vertices explored: " << std::setprecision(6) << (double) total_hops / queries->length << std::endl;
+
+    std::stringstream out_fn;
+    out_fn << "hopdist_" << out_fn_hnsw(index, nullptr);
+    std::ofstream f(out_fn.str(), std::ios::binary);
+    f.write((const char *) hop_list.data(), hop_list.size() * sizeof hop_list[0]);
 }
 
 

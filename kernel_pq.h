@@ -14,5 +14,6 @@ inline KernelFuncs get_funcs_pq() {
         .compute_many = compute_many<compute_ann_pq>,
         .make_arg_parser = make_arg_parser_pq,
         .out_fn = out_fn_pq,
+        .output_stats = nullptr,
     };
 }

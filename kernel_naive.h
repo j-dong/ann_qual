@@ -14,5 +14,6 @@ inline KernelFuncs get_funcs_naive() {
         .compute_many = compute_many<compute_ann_naive>,
         .make_arg_parser = make_arg_parser_naive,
         .out_fn = out_fn_naive,
+        .output_stats = nullptr,
     };
 }

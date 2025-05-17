@@ -15,10 +15,11 @@
 #include <cassert>
 #include <cstring>
 #include <vector>
-#include <queue>
 #include <random>
 #include <stdexcept>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
 
 #include "argparse/argparse.hpp"
 
@@ -233,6 +234,9 @@ struct VamanaIndex : Index {
     int L;
     RawVectorData *raw_data;
 
+    std::vector<int> hop_list;
+    int num_hops;
+
     VertexPtr entry = nullptr;
 
     std::mt19937 rng;
@@ -254,6 +258,7 @@ struct VamanaIndex : Index {
         for (int i = 0; i < 1; i++) {
             visited_pool.emplace_back(maxVertices);
         }
+        hop_list.reserve(10000);
     }
 
     Vertex &get(VertexPtr p) { return vertices[p.i]; }
@@ -367,6 +372,7 @@ std::vector<PQElement> VamanaIndex::greedySearch(float *data, int k) {
             continue;
         }
         visited.set(cur.vertex.i);
+        num_hops++;
         search_list.reserve_more(neighbors(cur.vertex).size());
         auto ins = search_list.do_insert();
         for (auto n : neighbors(cur.vertex)) {
@@ -385,28 +391,37 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
     bounded_pq search_list(L);
     search_list.emplace_empty(computeDistance(get(entry).data, data), entry);
     VisitedMap visited = takeVisitedMap();
+    // +0 -> visited
+    // +1 -> inserted, p's neighbor
+    // +2 -> inserted
     bool found_p = false;
     while (!search_list.empty()) {
         PQElement cur = search_list.pop_min();
         if (visited[cur.vertex.i]) {
             continue;
         }
+        if (visited.vec[cur.vertex.i] != visited.tag + 1) {
+            out_visited.push_back(cur);
+        }
         visited.set(cur.vertex.i);
-        out_visited.push_back(cur);
         search_list.reserve_more(neighbors(cur.vertex).size());
         auto ins = search_list.do_insert();
         if (p == cur.vertex) {
             found_p = true;
             for (auto n : neighbors(cur.vertex)) {
-                if (visited[n.i]) continue;
+                auto nt = visited.vec[n.i];
+                if (nt == visited.tag || nt == visited.tag + 1) continue;
+                visited.vec[n.i] = visited.tag + 1;
                 float dist = computeDistance(get(n).data, data);
-                ins.emplace_unchecked(dist, n);
                 out_visited.emplace_back(dist, n);
+                if (nt == visited.tag + 2) continue;
+                ins.emplace_unchecked(dist, n);
             }
         } else {
             for (auto n : neighbors(cur.vertex)) {
-                if (visited[n.i]) continue;
+                if (visited[n.i] || visited.vec[n.i] == visited.tag + 1 || visited.vec[n.i] == visited.tag + 2) continue;
                 ins.emplace_unchecked(computeDistance(get(n).data, data), n);
+                visited.vec[n.i] = visited.tag + 2;
             }
         }
     }
@@ -417,6 +432,8 @@ PQElement VamanaIndex::greedySearch(VertexPtr p, std::vector<PQElement> &out_vis
             out_visited.emplace_back(dist, n);
         }
     }
+    visited.reset();
+    visited.reset();
     releaseVisitedMap(std::move(visited));
     return *search_list.begin();
 }
@@ -596,7 +613,7 @@ void VamanaIndex::refine(float alpha) {
 #endif
 
 
-std::string out_fn_vamana(Index *raw_index, argparse::ArgumentParser &) {
+std::string out_fn_vamana(Index *raw_index, argparse::ArgumentParser *) {
     VamanaIndex *index = (VamanaIndex *) raw_index;
     std::stringstream out;
     out << "out_vamana_R" << index->maxDegree << "_L" << index->L;
@@ -647,9 +664,24 @@ std::unique_ptr<Index> preprocess_ann_vamana(bool is_l2, RawVectorData *vectors,
 int compute_ann_vamana(RawVectorData *vectors, int k, float *query, int *result, Index *raw_index) {
     (void) vectors;
     VamanaIndex *index = (VamanaIndex *) raw_index;
+    index->num_hops = 0;
     auto vec = index->greedySearch(query, k);
     for (int i = 0; i < (int) vec.size(); i++) {
         result[i] = vec[i].vertex.i;
     }
+    index->hop_list.push_back(index->num_hops);
     return vec.size();
+}
+
+void output_stats_vamana(RawVectorData *vectors, int k, RawVectorData *queries, int *result, Index *index) {
+    (void) vectors; (void) k; (void) result;
+    size_t total_hops = 0;
+    auto hop_list = static_cast<VamanaIndex *>(index)->hop_list;
+    for (int h : hop_list) total_hops += h;
+    std::cout << "[STATS] avg num vertices explored: " << std::setprecision(6) << (double) total_hops / queries->length << std::endl;
+
+    std::stringstream out_fn;
+    out_fn << "hopdist_" << out_fn_vamana(index, nullptr);
+    std::ofstream f(out_fn.str(), std::ios::binary);
+    f.write((const char *) hop_list.data(), hop_list.size() * sizeof hop_list[0]);
 }

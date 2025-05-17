@@ -105,11 +105,11 @@ static void write_assignments(int num_vectors, int *assignments, int *gather, in
 static void search_cluster(int c, WindowResult *out, float cluster_iprod, float *iprods, PQIndex *idx);
 
 
-std::string out_fn_pq(Index *raw_index, argparse::ArgumentParser &parser) {
+std::string out_fn_pq(Index *raw_index, argparse::ArgumentParser *parser) {
     PQIndex *index = (PQIndex *) raw_index;
     std::stringstream out;
     out << "out_pq_k" << index->num_clusters << "_b" << index->fine_bits << "_m" << index->num_groups << "_w" << index->window;
-    if (parser["--full"] == true) out << "_full";
+    if ((*parser)["--full"] == true) out << "_full";
     return out.str();
 }
 
