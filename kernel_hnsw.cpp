@@ -36,6 +36,21 @@
 # define UNIQUE_LOCK_TY(Ty) std::unique_lock<Ty>
 # define SHARED_LOCK_TY(Ty) std::unique_lock<Ty>
 # define COND_LOCK my_lock
+
+# if __cpp_lib_atomic_wait >= 201907L
+#  define ATOMIC_FLAG std::atomic_flag
+#  define HAS_ATOMIC_FLAG true
+#  define WAIT_PARAM false
+#  define BRACED_IF_FLAG(x) { x }
+#  define LOCK_IF_FLAG(mutex, x) { WITH_SHARED_LOCK(mutex); x }
+# else
+#  define ATOMIC_FLAG std::condition_variable_any
+#  define HAS_ATOMIC_FLAG false
+#  define WAIT_PARAM my_lock
+#  define BRACED_IF_FLAG(x) x
+#  define LOCK_IF_FLAG(mutex, x) x
+# endif
+
 #else
 # define WITH_SHARED_LOCK(mutex)
 # define WITH_UNIQUE_LOCK(mutex)
@@ -45,6 +60,8 @@
 # define SHARED_LOCK_TY(Ty) UNIQUE_LOCK_M
 # define UNIQUE_LOCK_M(val) 0
 # define COND_LOCK(val) (*my_lock)()
+# define BRACED_IF_FLAG(x) { x }
+# define LOCK_IF_FLAG(mutex, x) x
 namespace {
     template<typename T>
     struct UNIQUE_LOCK_M {};
@@ -118,7 +135,7 @@ struct HNSWIndex : Index {
     std::mutex visited_mutex;
     std::shared_mutex vertices_mutex;
     std::vector<std::unique_ptr<std::shared_mutex>> neighbor_mutexes;
-    std::unique_ptr<std::atomic_flag[]> below_cvs;
+    std::unique_ptr<ATOMIC_FLAG[]> below_cvs;
 #endif
 
     std::mt19937 rng;
@@ -151,13 +168,15 @@ struct HNSWIndex : Index {
         // extremely conservative bound
         vertices.reserve(2 * maxVertices);
 #ifdef _OPENMP
-        below_cvs = std::make_unique<std::atomic_flag[]>(maxVertices);
+        below_cvs = std::make_unique<ATOMIC_FLAG[]>(maxVertices);
 #endif
         for (int i = 0; i < maxVertices; i++) {
             vertices.emplace_back(i, nullptr);
 #ifdef _OPENMP
             neighbor_mutexes.push_back(std::make_unique<std::shared_mutex>());
+# if HAS_ATOMIC_FLAG
             below_cvs[i].clear();
+# endif
 #endif
         }
         // maxVertices * 2 * maxDegree + maxVertices * maxDegree
@@ -491,7 +510,9 @@ void HNSWIndex::insert(int id, float *data) {
 #ifdef _OPENMP
 // #pragma omp critical(cout)
 //                 std::cout << "set " << get(above).id << std::endl;
+# if HAS_ATOMIC_FLAG
                 below_cvs[get(above).id].test_and_set();
+# endif
                 below_cvs[get(above).id].notify_all();
 #endif
             }
@@ -510,13 +531,13 @@ void HNSWIndex::insert(int id, float *data) {
         for (; cur_level > ins_level; cur_level--) {
             ep1 = searchLayer1(data, std::move(ep1));
             VertexPtr next;
-            { WITH_SHARED_LOCK(vertices_mutex); next = get(ep1.vertex).below; }
+            BRACED_IF_FLAG(WITH_SHARED_LOCK(vertices_mutex); next = get(ep1.vertex).below;)
 #ifdef _OPENMP
             while (!next && cur_level > 0) {
 // #pragma omp critical(cout)
 //                 std::cout << "wait " << get(ep1.vertex).id << std::endl;
-                below_cvs[get(ep1.vertex).id].wait(false);
-                { WITH_SHARED_LOCK(vertices_mutex); next = get(ep1.vertex).below; }
+                below_cvs[get(ep1.vertex).id].wait(WAIT_PARAM);
+                LOCK_IF_FLAG(vertices_mutex, next = get(ep1.vertex).below;)
             }
 #endif
             ep1.vertex = next;
@@ -547,7 +568,9 @@ void HNSWIndex::insert(int id, float *data) {
 #ifdef _OPENMP
 // #pragma omp critical(cout)
 //             std::cout << "set " << get(above).id << std::endl;
+# if HAS_ATOMIC_FLAG
             below_cvs[get(above).id].test_and_set();
+# endif
             below_cvs[get(above).id].notify_all();
 #endif
         }
@@ -577,13 +600,13 @@ void HNSWIndex::insert(int id, float *data) {
         above = q_ptr;
         for (auto &el : ep.elements_for_lower()) {
             VertexPtr next;
-            { WITH_SHARED_LOCK(vertices_mutex); next = get(el.vertex).below; }
+            BRACED_IF_FLAG(WITH_SHARED_LOCK(vertices_mutex); next = get(el.vertex).below;)
 #ifdef _OPENMP
             while (!next && cur_level > 0) {
 // #pragma omp critical(cout)
 //                 std::cout << "wait " << get(el.vertex).id << std::endl;
-                below_cvs[get(el.vertex).id].wait(false);
-                { WITH_SHARED_LOCK(vertices_mutex); next = get(el.vertex).below; }
+                below_cvs[get(el.vertex).id].wait(WAIT_PARAM);
+                LOCK_IF_FLAG(vertices_mutex, next = get(el.vertex).below;)
             }
 #endif
             el.vertex = next;

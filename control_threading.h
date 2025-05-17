@@ -1,13 +1,13 @@
 #pragma once
 
-#include <cblas.h>
 #include <thread>
+
+#include "inc_cblas.h"
 
 #if __has_include(<blis.h>)
 # include <blis.h>
 # define BLAS_BLIS
 #elif __has_include(<mkl.h>)
-# include <mkl.h>
 # define BLAS_MKL
 #endif
 

@@ -1,7 +1,7 @@
 #include "kernel_utils.h"
 #include "load_files.h"
 
-#include <cblas.h>
+#include "inc_cblas.h"
 
 std::unique_ptr<float[]> preprocess_l2_bias(bool is_l2, int dim, int num_vectors, int stride, float *vectors) {
     if (!is_l2) return nullptr;

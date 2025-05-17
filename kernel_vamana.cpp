@@ -10,7 +10,7 @@
 #ifndef NOMINMAX
 # define NOMINMAX 1
 #endif
-#include <cblas.h>
+#include "inc_cblas.h"
 
 #include <cassert>
 #include <cstring>

@@ -2,7 +2,7 @@
 #include "kernel_utils.h"
 #include "load_files.h"
 
-#include "cblas.h"
+#include "inc_cblas.h"
 
 #include <vector>
 #include <algorithm>
