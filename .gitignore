@@ -7,4 +7,6 @@
 /plat.mk
 *.dll
 /out_*
+/graph_out_*
 /hopdist_*
+/outs/

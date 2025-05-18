@@ -468,10 +468,18 @@ int compute_ann_hnsw(RawVectorData *vectors, int k, float *query, int *result, I
     return vec.size();
 }
 
-void output_stats_hnsw(RawVectorData *vectors, int k, RawVectorData *queries, int *result, Index *index) {
+struct OutputData {
+    int id;
+    int level;
+    int degree;
+    int distance;
+};
+
+void output_stats_hnsw(RawVectorData *vectors, int k, RawVectorData *queries, int *result, Index *raw_index) {
     (void) vectors; (void) k; (void) result;
     size_t total_hops = 0;
-    auto hop_list = static_cast<HNSWIndex *>(index)->hop_list;
+    auto index = static_cast<HNSWIndex *>(raw_index);
+    auto hop_list = index->hop_list;
     for (int h : hop_list) total_hops += h;
     std::cout << "[STATS] avg num vertices explored: " << std::setprecision(6) << (double) total_hops / queries->length << std::endl;
 
@@ -479,6 +487,50 @@ void output_stats_hnsw(RawVectorData *vectors, int k, RawVectorData *queries, in
     out_fn << "hopdist_" << out_fn_hnsw(index, nullptr);
     std::ofstream f(out_fn.str(), std::ios::binary);
     f.write((const char *) hop_list.data(), hop_list.size() * sizeof hop_list[0]);
+
+    std::vector<OutputData> vec;
+    vec.resize(index->vertices.size());
+
+    {
+        ScopedTimer timer("basic info");
+        for (int i = 0; i < (int) vec.size(); i++) {
+            VertexPtr v = VertexPtr(i);
+            vec[i].id = index->get(v).id;
+            vec[i].level = index->isLayer0(v) ? 0 : -1;
+            vec[i].degree = index->get(v).numNeighbors;
+            index->num_hops = 0;
+            auto el = index->query(index->get(v).data, 1, 1).front();
+            if (el.vertex.i != (uint32_t) index->get(v).id) {
+                index->num_hops = ~index->num_hops;
+            }
+            vec[i].distance = index->num_hops;
+        }
+    }
+
+    std::vector<VertexPtr> remaining;
+    remaining.reserve(vec.size() - index->maxVertices);
+    for (int i = index->maxVertices; i < (int) vec.size(); i++) {
+        remaining.push_back(VertexPtr(i));
+    }
+
+    while (!remaining.empty()) {
+        ScopedTimer timer("remaining loop");
+        for (VertexPtr &v : remaining) {
+            int below_level = vec[index->get(v).below.i].level;
+            if (below_level != -1) {
+                vec[v.i].level = below_level + 1;
+                v = nullptr;
+            }
+        }
+        std::erase(remaining, nullptr); // thanks C++20
+    }
+
+    out_fn.clear(); out_fn.str(std::string());
+    out_fn << "graph_" << out_fn_hnsw(index, nullptr);
+    f.close();
+    f.clear();
+    f.open(out_fn.str(), std::ios::binary);
+    f.write((const char *) vec.data(), vec.size() * sizeof vec[0]);
 }
 
 
