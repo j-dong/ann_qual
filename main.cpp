@@ -43,6 +43,9 @@ int main(int argc, char **argv) {
         .help("number of results to return")
         .default_value(100)
         .scan<'d', int>();
+    parser.add_argument("--save")
+        .help("save the index to a file")
+        .flag();
 
     std::unique_ptr<argparse::ArgumentParser[], ManualArrayDeleter> parsers;
     {
@@ -135,6 +138,11 @@ int main(int argc, char **argv) {
         std::ofstream f(out_fn, std::ios::binary);
         f.write((const char *) result.data(), (size_t) k * (size_t) data_query.length);
         std::cout << "k-ANN output written to: " << out_fn << std::endl;
+
+        if (parser.get<bool>("--save")) {
+            funcs[ki].save(index.get(), &parsers[ki]);
+            std::cout << "index written to file" << std::endl;
+        }
     }
 
     if (!handled) {

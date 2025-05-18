@@ -8,6 +8,7 @@ output_stats_decl output_stats_vamana;
 
 make_arg_parser_decl make_arg_parser_vamana;
 out_fn_decl out_fn_vamana;
+save_decl save_vamana;
 
 inline KernelFuncs get_funcs_vamana() {
     return KernelFuncs {
@@ -18,5 +19,6 @@ inline KernelFuncs get_funcs_vamana() {
         .make_arg_parser = make_arg_parser_vamana,
         .out_fn = out_fn_vamana,
         .output_stats = output_stats_vamana,
+        .save = save_vamana,
     };
 }

@@ -2,14 +2,15 @@ include plat.mk
 
 CXX ?= g++
 
-SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp kernel_vamana.cpp timer.cpp kernel_utils.cpp simd_utils.cpp
-OBJS := $(SRCS:%.cpp=objs/%.o)
+SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp kernel_vamana.cpp timer.cpp kernel_utils.cpp simd_utils.cpp run_filtered.cpp
+OBJS := $(SRCS:%.cpp=objs/%.o) $(SRCS:%.cpp=objs_debug/%.o)
 DEPS := $(SRCS:%.cpp=deps/%.d)
 
-CXXFLAGS := -O3 -std=c++20 -fopenmp -g -march=native -Wall -Wextra
-CPPFLAGS := -DNDEBUG
-# CXXFLAGS := -std=c++20 -g -march=native -Wall -Wextra -fopenmp
-# CPPFLAGS :=
+CXXFLAGS := -std=c++20 -Wall -Wextra -fopenmp
+CXXFLAGS_RELEASE := -O3 -g -march=native
+CPPFLAGS_RELEASE := -DNDEBUG
+CXXFLAGS_DEBUG := -g -march=native
+CPPFLAGS_DEBUG :=
 LDFLAGS := -g -fopenmp
 
 ifeq ($(PLATFORM),win32)
@@ -29,11 +30,34 @@ else
 	LIBS := -lopenblas
 endif
 
-test$(EXESUFF): objs/main.o objs/load_files.o objs/kernel_naive.o objs/kernel_pq.o objs/kernel_hnsw.o objs/kernel_vamana.o objs/timer.o objs/kernel_utils.o objs/simd_utils.o $(EXTRA_OBJS)
+EXE_NAMES := test run_filtered
+EXES := $(foreach exe,$(EXE_NAMES),$(exe)$(EXESUFF))
+EXES_DEBUG := $(foreach exe,$(EXE_NAMES),$(exe)_debug$(EXESUFF))
+
+test_OBJS := main.o load_files.o kernel_naive.o kernel_pq.o kernel_hnsw.o kernel_vamana.o timer.o kernel_utils.o simd_utils.o
+run_filtered_OBJS := run_filtered.o load_files.o timer.o kernel_utils.o simd_utils.o
+
+all: $(EXES)
+
+all_debug: $(EXES_DEBUG)
+
+test$(EXESUFF): $(foreach file,$(test_OBJS),objs/$(file)) $(EXTRA_OBJS)
 	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
 
-objs/%.o: %.cpp
-	$(CXX) -c -o $@ $(CXXFLAGS) $(CPPFLAGS) $< -MMD -MP -MF deps/$*.d
+test_debug$(EXESUFF): $(foreach file,$(test_OBJS),objs_debug/$(file)) $(EXTRA_OBJS)
+	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
+
+run_filtered$(EXESUFF): $(foreach file,$(run_filtered_OBJS),objs/$(file)) $(EXTRA_OBJS)
+	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
+
+run_filtered_debug$(EXESUFF): $(foreach file,$(run_filtered_OBJS),objs_debug/$(file)) $(EXTRA_OBJS)
+	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
+
+objs/%.o deps/%.d: %.cpp
+	$(CXX) -c -o objs/$*.o $(CXXFLAGS_RELEASE) $(CXXFLAGS) $(CPPFLAGS_RELEASE) $(CPPFLAGS) $< -MMD -MP -MF deps/$*.d
+
+objs_debug/%.o deps/%.d: %.cpp
+	$(CXX) -c -o objs_debug/$*.o $(CXXFLAGS_DEBUG) $(CXXFLAGS) $(CPPFLAGS_DEBUG) $(CPPFLAGS) $< -MMD -MP -MF deps/$*.d
 
 -include $(DEPS)
 
@@ -50,12 +74,12 @@ plat.mk:
 	rm detect/test_win32.cpp
 	echo "#include <mkl.h>" >detect/test_mkl.cpp
 	echo "int main() {}" >>detect/test_mkl.cpp
-	$(CXX) -o /dev/null detect/test_mkl.cpp -lmkl_core 2>/dev/null 1>&2 && echo 'BLAS := mkl' >>plat.mk
+	-$(CXX) -o /dev/null detect/test_mkl.cpp -lmkl_core 2>/dev/null 1>&2 && echo 'BLAS := mkl' >>plat.mk
 	rm detect/test_mkl.cpp
 	rmdir detect
 
 clean:
-	$(RM) $(OBJS) $(DEPS) $(EXTRA_OBJS) plat.mk
+	$(RM) $(OBJS) $(DEPS) $(EXTRA_OBJS) plat.mk $(EXES) $(EXES_DEBUG)
 
 .PHONY: clean
 .SUFFIXES:

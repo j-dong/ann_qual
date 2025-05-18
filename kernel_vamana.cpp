@@ -5,6 +5,7 @@
 #include "simd_utils.h"
 #include "graph_utils.h"
 #include "visited_map.h"
+#include "magic.h"
 #include <span>
 
 #ifndef NOMINMAX
@@ -755,4 +756,36 @@ void output_stats_vamana(RawVectorData *vectors, int k, RawVectorData *queries, 
     f.clear();
     f.open(out_fn.str(), std::ios::binary);
     f.write((const char *) vec.data(), vec.size() * sizeof vec[0]);
+}
+
+struct VamanaHeader {
+    int magic;
+    int dim;
+    int max_degree;
+    int num_points;
+    int entry;
+};
+
+void save_vamana(Index *raw_index, argparse::ArgumentParser *parser) {
+    std::stringstream out_fn;
+    out_fn << "saved_" << out_fn_vamana(raw_index, parser);
+    std::ofstream f(out_fn.str(), std::ios::binary);
+    
+    auto index = static_cast<VamanaIndex *>(raw_index);
+    VamanaHeader header;
+    header.magic = magic::VAMANA;
+    header.dim = index->dim;
+    header.max_degree = index->maxDegree;
+    header.num_points = index->maxVertices;
+    header.entry = index->entry.i;
+    
+    f.write((const char *) &header, sizeof header);
+    f.write((const char *) index->vertices.data(), index->vertices.size() * sizeof index->vertices[0]);
+    
+    std::vector<VertexPtr> vertex_neighbors;
+    for (int i = 0; i < (int) index->vertices.size(); i++) {
+        vertex_neighbors.clear();
+        vertex_neighbors.assign(index->neighbors(VertexPtr(i)).begin(), index->neighbors(VertexPtr(i)).end());
+        f.write((const char *) vertex_neighbors.data(), vertex_neighbors.size() * sizeof vertex_neighbors[0]);
+    }
 }

@@ -6,13 +6,14 @@
 
 struct VisitedMap {
     uint8_t *vec = nullptr;
-    char tag;
+    size_t size;
+    uint8_t tag;
     bool cleared = false;
 
-    VisitedMap(size_t size) {
+    VisitedMap(size_t size) : size(size) {
         vec = new uint8_t[size];
     }
-    VisitedMap(VisitedMap &&o) : vec(o.vec) {
+    VisitedMap(VisitedMap &&o) : vec(o.vec), size(o.size) {
         o.vec = nullptr;
     }
     VisitedMap &operator=(VisitedMap &&o) {
@@ -26,7 +27,7 @@ struct VisitedMap {
     bool operator[](size_t i) const { return vec[i] == tag; }
     void set(size_t i) { vec[i] = tag; }
 
-    void reset() { tag++; }
+    void reset() { tag++; if (tag == 0) { memset(vec, 0, size); tag++; } }
 
     static VisitedMap takeFromPool(std::vector<VisitedMap> &pool, size_t maxVertices) {
         if (pool.size() == 0) {
@@ -37,6 +38,7 @@ struct VisitedMap {
         if (!ret.cleared) {
             memset(ret.vec, 0, maxVertices);
             ret.tag = 0;
+            ret.cleared = true;
         }
         ret.tag++;
         return ret;

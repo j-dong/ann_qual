@@ -5,6 +5,7 @@ compute_decl compute_ann_pq;
 
 make_arg_parser_decl make_arg_parser_pq;
 out_fn_decl out_fn_pq;
+save_decl save_pq;
 
 inline KernelFuncs get_funcs_pq() {
     return KernelFuncs {
@@ -15,5 +16,6 @@ inline KernelFuncs get_funcs_pq() {
         .make_arg_parser = make_arg_parser_pq,
         .out_fn = out_fn_pq,
         .output_stats = nullptr,
+        .save = save_pq,
     };
 }

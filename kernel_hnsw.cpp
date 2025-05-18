@@ -6,6 +6,7 @@
 #include "graph_utils.h"
 #include "visited_map.h"
 #include <type_traits>
+#include "magic.h"
 
 #ifndef NOMINMAX
 # define NOMINMAX 1
@@ -36,6 +37,7 @@
 # define UNIQUE_LOCK_TY(Ty) std::unique_lock<Ty>
 # define SHARED_LOCK_TY(Ty) std::unique_lock<Ty>
 # define COND_LOCK my_lock
+# define COND_UNLOCK my_lock.unlock()
 
 # if __cpp_lib_atomic_wait >= 201907L
 #  define ATOMIC_FLAG std::atomic_flag
@@ -60,6 +62,7 @@
 # define SHARED_LOCK_TY(Ty) UNIQUE_LOCK_M
 # define UNIQUE_LOCK_M(val) 0
 # define COND_LOCK(val) (*my_lock)()
+# define COND_UNLOCK
 # define BRACED_IF_FLAG(x) { x }
 # define LOCK_IF_FLAG(mutex, x) x
 namespace {
@@ -331,7 +334,7 @@ max_heap HNSWIndex::searchLayer(float *data, max_heap ep, int ef) {
             if (visited[id]) continue;
             visited.set(id);
             float dist = computeDistance(get(e).data, data);
-            if (dist < farthest_dist || candidates.size() < (size_t) ef) {
+            if (dist < farthest_dist || nearest.size() < (size_t) ef) {
                 pushq(candidates, e, dist);
                 if (nearest.size() >= (size_t) ef) {
                     if (dist < farthest_dist) {
@@ -379,11 +382,9 @@ PQElement HNSWIndex::searchLayer1(float *data, PQElement ep) {
             if (visited[id]) continue;
             visited.set(id);
             float dist = computeDistance(get(e).data, data);
-            if (dist < nearest.dist || candidates.empty()) {
+            if (dist < nearest.dist) {
                 pushq(candidates, e, dist);
-                if (dist < nearest.dist) {
-                    nearest = PQElement(dist, e);
-                }
+                nearest = PQElement(dist, e);
             }
         }
     }
@@ -444,7 +445,7 @@ std::unique_ptr<Index> preprocess_ann_hnsw(bool is_l2, RawVectorData *vectors, R
 #ifdef _OPENMP
             insert_progress.fetch_add(1);
 #else
-            insert_progerss++;
+            insert_progress++;
 #endif
         if (cur_progress % 1000 == 0) {
 #pragma omp critical(cout)
@@ -531,6 +532,39 @@ void output_stats_hnsw(RawVectorData *vectors, int k, RawVectorData *queries, in
     f.clear();
     f.open(out_fn.str(), std::ios::binary);
     f.write((const char *) vec.data(), vec.size() * sizeof vec[0]);
+}
+
+struct HNSWHeader {
+    int magic;
+    int dim;
+    int max_degree;
+    int num_points;
+    int num_vertices;
+    int max_level;
+    int entry;
+};
+
+void save_hnsw(Index *raw_index, argparse::ArgumentParser *parser) {
+    std::stringstream out_fn;
+    out_fn << "saved_" << out_fn_hnsw(raw_index, parser);
+    std::ofstream f(out_fn.str(), std::ios::binary);
+    auto index = static_cast<HNSWIndex *>(raw_index);
+    HNSWHeader header;
+    header.magic = magic::HNSW;
+    header.dim = index->dim;
+    header.max_degree = index->maxDegree;
+    header.num_points = index->maxVertices;
+    header.num_vertices = index->vertices.size();
+    header.max_level = index->max_level;
+    header.entry = index->entry.i;
+    f.write((const char *) &header, sizeof header);
+    f.write((const char *) index->vertices.data(), index->vertices.size() * sizeof index->vertices[0]);
+    std::vector<VertexPtr> vertex_neighbors;
+    for (int i = 0; i < (int) index->vertices.size(); i++) {
+        vertex_neighbors.clear();
+        vertex_neighbors.assign(index->getNeighbors(VertexPtr(i)).begin(), index->getNeighbors(VertexPtr(i)).end());
+        f.write((const char *) vertex_neighbors.data(), vertex_neighbors.size() * sizeof vertex_neighbors[0]);
+    }
 }
 
 
@@ -648,7 +682,7 @@ void HNSWIndex::insert(int id, float *data) {
                 assert(en[i]);
             }
         }
-        my_lock.unlock();
+        COND_UNLOCK;
         above = q_ptr;
         for (auto &el : ep.elements_for_lower()) {
             VertexPtr next;

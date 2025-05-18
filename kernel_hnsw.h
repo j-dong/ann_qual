@@ -8,6 +8,7 @@ output_stats_decl output_stats_hnsw;
 
 make_arg_parser_decl make_arg_parser_hnsw;
 out_fn_decl out_fn_hnsw;
+save_decl save_hnsw;
 
 inline KernelFuncs get_funcs_hnsw() {
     return KernelFuncs {
@@ -18,5 +19,6 @@ inline KernelFuncs get_funcs_hnsw() {
         .make_arg_parser = make_arg_parser_hnsw,
         .out_fn = out_fn_hnsw,
         .output_stats = output_stats_hnsw,
+        .save = save_hnsw,
     };
 }

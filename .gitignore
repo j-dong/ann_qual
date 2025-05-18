@@ -10,3 +10,9 @@
 /graph_out_*
 /hopdist_*
 /outs/
+/objs_debug/
+/saved_out_*
+/filtered_out_*
+/filtered_naive_*
+.vscode
+/stdout_filtered.txt

@@ -41,6 +41,8 @@ typedef void make_arg_parser_decl(argparse::ArgumentParser &parser);
 
 typedef std::string out_fn_decl(Index *index, argparse::ArgumentParser *parser);
 
+typedef void save_decl(Index *index, argparse::ArgumentParser *parser);
+
 struct KernelFuncs {
     const char *name;
     preprocess_decl *preprocess;
@@ -49,6 +51,7 @@ struct KernelFuncs {
     make_arg_parser_decl *make_arg_parser;
     out_fn_decl *out_fn;
     output_stats_decl *output_stats;
+    save_decl *save;
 };
 
 typedef KernelFuncs get_funcs_decl();

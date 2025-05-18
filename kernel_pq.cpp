@@ -3,6 +3,7 @@
 #include "load_files.h"
 #include "timer.h"
 #include "simd_utils.h"
+#include "magic.h"
 
 #ifndef NOMINMAX
 # define NOMINMAX 1
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <random>
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <numeric>
 
@@ -111,6 +113,36 @@ std::string out_fn_pq(Index *raw_index, argparse::ArgumentParser *parser) {
     out << "out_pq_k" << index->num_clusters << "_b" << index->fine_bits << "_m" << index->num_groups << "_w" << index->window;
     if ((*parser)["--full"] == true) out << "_full";
     return out.str();
+}
+
+struct PQHeader {
+    int magic; // determines whether L2
+    int dim;
+    int num_clusters;
+    int fine_bits;
+    int num_groups;
+};
+
+void save_pq(Index *raw_index, argparse::ArgumentParser *parser) {
+    std::stringstream out_fn;
+    out_fn << "saved_" << out_fn_pq(raw_index, parser);
+    std::ofstream f(out_fn.str(), std::ios::binary);
+    auto index = static_cast<PQIndex *>(raw_index);
+    PQHeader header;
+    header.magic = index->is_l2 ? magic::PQ_L2 : magic::PQ_IP;
+    header.dim = index->dim;
+    header.num_clusters = index->num_clusters;
+    header.fine_bits = index->fine_bits;
+    header.num_groups = index->num_groups;
+    f.write((const char *) &header, sizeof header);
+    f.write((const char *) index->clusters.get(), index->num_clusters * index->dim * sizeof index->clusters[0]);
+    f.write((const char *) index->clusters_bias.get(), index->num_clusters * sizeof index->clusters_bias[0]);
+    f.write((const char *) index->codebooks.get(), index->num_groups * (1 << index->fine_bits) * index->dim * sizeof index->codebooks[0]);
+    f.write((const char *) index->transform.get(), index->dim * index->dim * sizeof index->transform[0]);
+    f.write((const char *) index->cluster_start.get(), (index->num_clusters + 1) * sizeof index->cluster_start[0]);
+    f.write((const char *) index->cluster_values.get(), index->num_clusters * index->dim * sizeof index->cluster_values[0]);
+    f.write((const char *) index->bias.get(), index->num_clusters * sizeof index->bias[0]);
+    f.write((const char *) index->clustered_quant.get(), index->num_clusters * index->dim * sizeof index->clustered_quant[0]);
 }
 
 void make_arg_parser_pq(argparse::ArgumentParser &parser) {
@@ -688,6 +720,6 @@ static void search_cluster(int c, WindowResult *out, float cluster_iprod, float 
     } else if (group_size == 3) {
         search_helper<3>(start, N, out, qvec_size, cluster_iprod, iprods, idx);
     } else {
-        throw std::runtime_error("invalid number of bytes to write");
+        throw std::runtime_error("invalid number of bytes to read");
     }
 }
