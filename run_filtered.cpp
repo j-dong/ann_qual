@@ -25,9 +25,6 @@
 #include <vector>
 #include <cassert>
 
-double overhead_total = 0.0;
-double compute_total = 0.0;
-
 constexpr int byte_size(int bits) {
     return (bits + 7) / 8;
 }
@@ -186,7 +183,7 @@ protected:
             }
         }
         timer.print_timer_message("avg filtered query latency", -1, timer.get_ms() / query->length);
-        if (false) StatsInitHelper<Derived>::writeOut(stats, stats_filename);
+        StatsInitHelper<Derived>::writeOut(stats, stats_filename);
     }
 
     template<typename Derived>
@@ -555,7 +552,7 @@ int main(int argc, char **argv) {
     result.resize(parser.get<int>("-k") * data_query.length);
     index->run_filter_test(&data_query, result.data(), parser.get<int>("-k"), index->get_num_points() - (int) (parser.get<float>("-s") * index->get_num_points()), ss.str());
 
-    if (false) {
+    {
         // index fname is something like saved_out_pq_k1024_b8_m32_w16_full
         // --> filtered_out_pq_k1024_b8_m32_w16_full
         ss.str(std::string()); ss.clear();
@@ -564,9 +561,6 @@ int main(int argc, char **argv) {
         ofs.write(reinterpret_cast<char *>(result.data()), result.size() * sizeof(int));
         std::cout << "filtered results saved to " << ss.str() << std::endl;
     }
-
-    std::cout << "overhead: " << overhead_total / data_query.length << " ms" << std::endl;
-    std::cout << "compute:  " << compute_total / data_query.length << " ms" << std::endl;
 
     close_files();
     return 0;
@@ -630,8 +624,6 @@ void NaiveIndex::query_filtered(float *query, int *result, int k, int filter_idx
 static int search_cluster_filtered(int c, SortedResult *out, float cluster_iprod, float *iprods, PQIndex *idx, int filter_idx);
 
 void PQIndex::query_filtered(float *query, int *result, int k, int filter_idx) {
-    std::chrono::time_point<std::chrono::steady_clock> start, end;
-    start = std::chrono::steady_clock::now();
     // Compute cluster inner products
     std::vector<float> iprods(num_clusters);
     std::vector<float> query_xformed(dim);
@@ -701,11 +693,6 @@ void PQIndex::query_filtered(float *query, int *result, int k, int filter_idx) {
     int filtered_found = 0;
     int cluster_idx = 0;
 
-    end = std::chrono::steady_clock::now();
-    overhead_total += std::chrono::duration_cast<
-        std::chrono::duration<double, std::milli>
-    >(end - start).count();
-    start = std::chrono::steady_clock::now();
     while (filtered_found < k && cluster_idx < num_clusters) {
         int c = cluster_indices[cluster_idx];
         float iprod = iprods[c] - clusters_bias[c];
@@ -727,11 +714,6 @@ void PQIndex::query_filtered(float *query, int *result, int k, int filter_idx) {
         cluster_idx++;
     }
     statsWriter(this).write(Stats{.clusters_explored = (uint32_t) cluster_idx});
-
-    end = std::chrono::steady_clock::now();
-    compute_total += std::chrono::duration_cast<
-        std::chrono::duration<double, std::milli>
-    >(end - start).count();
 
     // same as naive
     if (k < filtered_found) {
