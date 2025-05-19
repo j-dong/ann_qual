@@ -104,7 +104,7 @@ public:
         description = T::description;
     }
 
-    void write(const std::string &filename) {
+    void writeOut(const std::string &filename) {
         std::ofstream ofs(filename, std::ios::binary);
         uint32_t offset = (2 + header.size()) * sizeof(uint32_t);
         uint32_t desc_len = (description.size() & ~0x3) + 4;
@@ -148,6 +148,11 @@ public:
     static void init(StatsProvider &stats, size_t count) {
         init_impl<Derived>(stats, count, has_stats<Derived>{});
     }
+
+    static void writeOut(StatsProvider &stats, std::string filename) {
+        if constexpr(!has_stats<Derived>::value) { return; }
+        stats.writeOut(filename);
+    }
 };
 
 enum class IndexType {
@@ -165,7 +170,7 @@ public:
 
 protected:
     template<typename Derived>
-    void run_filter_test_impl(RawVectorData *query, int *result, int k, int filter_idx) {
+    void run_filter_test_impl(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) {
         StatsInitHelper<Derived>::init(stats, query->length);
         memset(result, -1, query->length * k * sizeof(int));
         ScopedTimer timer("run_filter_test");
@@ -178,6 +183,7 @@ protected:
             }
         }
         timer.print_timer_message("avg filtered query latency", -1, timer.get_ms() / query->length);
+        StatsInitHelper<Derived>::writeOut(stats, stats_filename);
     }
 
     template<typename Derived>
@@ -190,7 +196,7 @@ public:
     virtual IndexType type() const = 0;
     virtual void query_filtered(float *query, int *result, int k, int filter_idx) = 0;
     virtual int get_num_points() const = 0;
-    virtual void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx) = 0;
+    virtual void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) = 0;
 };
 
 struct Vertex {
@@ -221,8 +227,8 @@ struct NaiveIndex : Index {
     IndexType type() const override { return IndexType::Naive; }
     int get_num_points() const override { return vectors->length; }
     void query_filtered(float *query, int *result, int k, int filter_idx) override;
-    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx) override {
-        run_filter_test_impl<NaiveIndex>(query, result, k, filter_idx);
+    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) override {
+        run_filter_test_impl<NaiveIndex>(query, result, k, filter_idx, stats_filename);
     }
 };
 
@@ -255,8 +261,8 @@ struct PQIndex : Index {
     IndexType type() const override { return IndexType::PQ; }
     int get_num_points() const override { return num_points; }
     void query_filtered(float *query, int *result, int k, int filter_idx) override;
-    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx) override {
-        run_filter_test_impl<PQIndex>(query, result, k, filter_idx);
+    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) override {
+        run_filter_test_impl<PQIndex>(query, result, k, filter_idx, stats_filename);
     }
 };
 
@@ -293,8 +299,8 @@ struct HNSWIndex : Index, GraphIndex {
     IndexType type() const override { return IndexType::HNSW; }
     int get_num_points() const override { return numPoints; }
     void query_filtered(float *query, int *result, int k, int filter_idx) override;
-    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx) override {
-        run_filter_test_impl<HNSWIndex>(query, result, k, filter_idx);
+    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) override {
+        run_filter_test_impl<HNSWIndex>(query, result, k, filter_idx, stats_filename);
     }
 };
 
@@ -312,8 +318,8 @@ struct VamanaIndex : Index, GraphIndex {
     IndexType type() const override { return IndexType::Vamana; }
     int get_num_points() const override { return numPoints; }
     void query_filtered(float *query, int *result, int k, int filter_idx) override;
-    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx) override {
-        run_filter_test_impl<VamanaIndex>(query, result, k, filter_idx);
+    void run_filter_test(RawVectorData *query, int *result, int k, int filter_idx, std::string stats_filename) override {
+        run_filter_test_impl<VamanaIndex>(query, result, k, filter_idx, stats_filename);
     }
 };
 
@@ -534,18 +540,22 @@ int main(int argc, char **argv) {
 
     auto index = load_index(parser.get<std::string>("index_path"), &data_base);
 
+    std::string fname = parser.get<std::string>("index_path");
+    if (fname.find("saved_") != std::string::npos) {
+        fname = fname.substr(6);
+    }
+
+    std::stringstream ss;
+    ss << "stats_filtered_" << fname << "_" << std::fixed << std::setprecision(3) << parser.get<float>("-s");
+
     std::vector<int> result;
     result.resize(parser.get<int>("-k") * data_query.length);
-    index->run_filter_test(&data_query, result.data(), parser.get<int>("-k"), index->get_num_points() - (int) (parser.get<float>("-s") * index->get_num_points()));
+    index->run_filter_test(&data_query, result.data(), parser.get<int>("-k"), index->get_num_points() - (int) (parser.get<float>("-s") * index->get_num_points()), ss.str());
 
     {
         // index fname is something like saved_out_pq_k1024_b8_m32_w16_full
         // --> filtered_out_pq_k1024_b8_m32_w16_full
-        std::string fname = parser.get<std::string>("index_path");
-        if (fname.find("saved_") != std::string::npos) {
-            fname = fname.substr(6);
-        }
-        std::stringstream ss;
+        ss.str(std::string()); ss.clear();
         ss << "filtered_" << fname << "_" << std::fixed << std::setprecision(3) << parser.get<float>("-s");
         std::ofstream ofs(ss.str(), std::ios::binary);
         ofs.write(reinterpret_cast<char *>(result.data()), result.size() * sizeof(int));
@@ -665,20 +675,15 @@ void PQIndex::query_filtered(float *query, int *result, int k, int filter_idx) {
     for (int i = 0; i < num_groups; i++) {
         int start_dim = i * group_dim;
         int cur_dim = std::min(group_dim, dim - start_dim);
-        cblas_sgemv(
-            CblasRowMajor,
-            CblasNoTrans,
-            subcodebook_size,
-            cur_dim,
-            1.0f,
-            &codebooks[i * subcodebook_size * group_dim],
-            cur_dim,
-            &query_xformed[start_dim],
-            1,
-            0.0f,
-            &cb_iprods[subcodebook_size * i],
-            1
-        );
+        for (int row = 0; row < subcodebook_size; ++row) {
+            float sum = 0.0f;
+            for (int col = 0; col < cur_dim; ++col) {
+                float a = codebooks[i * subcodebook_size * group_dim + row * cur_dim + col];
+                float x = query_xformed[start_dim + col];
+                sum += a * x;
+            }
+            cb_iprods[subcodebook_size * i + row] = sum;
+        }
     }
 
     // Search clusters with dynamic window size
