@@ -1,9 +1,12 @@
 *.swp
 *~
 /deps/
+/deps_debug/
 /objs/
+/objs_debug/
 *.exe
 /test
+/run_filtered
 /plat.mk
 *.dll
 /out_*
@@ -16,3 +19,6 @@
 /filtered_naive_*
 .vscode
 /stdout_filtered.txt
+/stats_filtered_out_*
+/stats_naive_*
+*.png
