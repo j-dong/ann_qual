@@ -4,7 +4,7 @@ CXX ?= g++
 
 SRCS := main.cpp load_files.cpp kernel_naive.cpp kernel_pq.cpp kernel_hnsw.cpp kernel_vamana.cpp timer.cpp kernel_utils.cpp simd_utils.cpp run_filtered.cpp
 OBJS := $(SRCS:%.cpp=objs/%.o) $(SRCS:%.cpp=objs_debug/%.o)
-DEPS := $(SRCS:%.cpp=deps/%.d)
+DEPS := $(SRCS:%.cpp=deps/%.d) $(SRCS:%.cpp=deps_debug/%.d)
 
 CXXFLAGS := -std=c++20 -Wall -Wextra -fopenmp
 CXXFLAGS_RELEASE := -O3 -g -march=native
@@ -53,11 +53,11 @@ run_filtered$(EXESUFF): $(foreach file,$(run_filtered_OBJS),objs/$(file)) $(EXTR
 run_filtered_debug$(EXESUFF): $(foreach file,$(run_filtered_OBJS),objs_debug/$(file)) $(EXTRA_OBJS)
 	$(CXX) -o $@ $(LDFLAGS) $^ $(LIBS)
 
-objs/%.o deps/%.d: %.cpp
+objs/%.o: %.cpp
 	$(CXX) -c -o objs/$*.o $(CXXFLAGS_RELEASE) $(CXXFLAGS) $(CPPFLAGS_RELEASE) $(CPPFLAGS) $< -MMD -MP -MF deps/$*.d
 
-objs_debug/%.o deps/%.d: %.cpp
-	$(CXX) -c -o objs_debug/$*.o $(CXXFLAGS_DEBUG) $(CXXFLAGS) $(CPPFLAGS_DEBUG) $(CPPFLAGS) $< -MMD -MP -MF deps/$*.d
+objs_debug/%.o: %.cpp
+	$(CXX) -c -o objs_debug/$*.o $(CXXFLAGS_DEBUG) $(CXXFLAGS) $(CPPFLAGS_DEBUG) $(CPPFLAGS) $< -MMD -MP -MF deps_debug/$*.d
 
 -include $(DEPS)
 

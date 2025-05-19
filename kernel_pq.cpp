@@ -37,6 +37,7 @@ struct PQIndex : public Index {
     int fine_bits;
     int num_groups;
     int window; // number of clusters to search
+    int num_points;
     box<float[]> clusters;
     box<float[]> clusters_bias;
     box<float[]> codebooks;
@@ -121,6 +122,7 @@ struct PQHeader {
     int num_clusters;
     int fine_bits;
     int num_groups;
+    int num_points;
 };
 
 void save_pq(Index *raw_index, argparse::ArgumentParser *parser) {
@@ -134,15 +136,25 @@ void save_pq(Index *raw_index, argparse::ArgumentParser *parser) {
     header.num_clusters = index->num_clusters;
     header.fine_bits = index->fine_bits;
     header.num_groups = index->num_groups;
+    header.num_points = index->num_points;
+    int qvec_size = roundup_line(header.num_groups * byte_size(header.fine_bits));
+    int group_dim = (index->dim + index->num_groups - 1) / index->num_groups;
     f.write((const char *) &header, sizeof header);
     f.write((const char *) index->clusters.get(), index->num_clusters * index->dim * sizeof index->clusters[0]);
     f.write((const char *) index->clusters_bias.get(), index->num_clusters * sizeof index->clusters_bias[0]);
-    f.write((const char *) index->codebooks.get(), index->num_groups * (1 << index->fine_bits) * index->dim * sizeof index->codebooks[0]);
+    f.write((const char *) index->codebooks.get(), index->num_groups * (1 << index->fine_bits) * group_dim * sizeof index->codebooks[0]);
     f.write((const char *) index->transform.get(), index->dim * index->dim * sizeof index->transform[0]);
     f.write((const char *) index->cluster_start.get(), (index->num_clusters + 1) * sizeof index->cluster_start[0]);
-    f.write((const char *) index->cluster_values.get(), index->num_clusters * index->dim * sizeof index->cluster_values[0]);
-    f.write((const char *) index->bias.get(), index->num_clusters * sizeof index->bias[0]);
-    f.write((const char *) index->clustered_quant.get(), index->num_clusters * index->dim * sizeof index->clustered_quant[0]);
+    f.write((const char *) index->cluster_values.get(), index->num_points * sizeof index->cluster_values[0]);
+    if (index->is_l2) {
+        f.write((const char *) index->bias.get(), index->num_points * sizeof index->bias[0]);
+    } else {
+        // output some zeroes instead
+        std::vector<float> zeroes;
+        zeroes.resize(index->num_points);
+        f.write((const char *) zeroes.data(), index->num_points * sizeof index->bias[0]);
+    }
+    f.write((const char *) index->clustered_quant.get(), qvec_size * index->num_points);
 }
 
 void make_arg_parser_pq(argparse::ArgumentParser &parser) {
@@ -171,6 +183,7 @@ box<Index> preprocess_ann_pq(bool is_l2, RawVectorData *vectors, RawVectorData *
     box<PQIndex> ret = std::make_unique<PQIndex>();
     int dim = vectors->dim;
     ret->dim = dim;
+    ret->num_points = vectors->length;
     if (parser["--full"] == true) {
         learn = vectors;
     }

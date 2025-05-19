@@ -333,6 +333,7 @@ struct PQHeader {
     int num_clusters;
     int fine_bits;
     int num_groups;
+    int num_points;
 };
 
 struct HNSWHeader {
@@ -362,7 +363,7 @@ std::unique_ptr<NaiveIndex> load_naive(RawVectorData *raw_data) {
     return index;
 }
 
-std::unique_ptr<PQIndex> load_pq(std::istream &is, RawVectorData *raw_data) {
+std::unique_ptr<PQIndex> load_pq(std::istream &is, [[maybe_unused]] RawVectorData *raw_data) {
     PQHeader header;
     is.read(reinterpret_cast<char *>(&header), sizeof(header));
     if (header.magic != magic::PQ_L2 && header.magic != magic::PQ_IP) {
@@ -374,21 +375,22 @@ std::unique_ptr<PQIndex> load_pq(std::istream &is, RawVectorData *raw_data) {
     index->num_clusters = header.num_clusters;
     index->fine_bits = header.fine_bits;
     index->num_groups = header.num_groups;
-    index->num_points = (int) raw_data->length;
+    index->num_points = header.num_points;
 
     // resize vectors
+    int group_dim = (index->dim + index->num_groups - 1) / index->num_groups;
     index->clusters.resize(header.num_clusters * header.dim);
     index->clusters_bias.resize(header.num_clusters);
-    index->codebooks.resize(header.num_groups * (1 << header.fine_bits) * header.dim);
+    index->codebooks.resize(header.num_groups * (1 << header.fine_bits) * group_dim);
     index->transform.resize(header.dim * header.dim);
     index->cluster_start.resize(header.num_clusters + 1);
-    index->cluster_values.resize(header.num_clusters * header.dim);
-    index->bias.resize(header.num_clusters);
+    index->cluster_values.resize(header.num_points);
+    index->bias.resize(header.num_points);
     int qvec_size = roundup_line(header.num_groups * byte_size(header.fine_bits));
     index->clustered_quant = std::unique_ptr<char[], aligned_deleter>(
-            new (std::align_val_t(64)) char[qvec_size * raw_data->length]
+            new (std::align_val_t(64)) char[qvec_size * header.num_points]
         );
-    
+
     // read vectors
     is.read(reinterpret_cast<char *>(index->clusters.data()), index->clusters.size() * sizeof(float));
     is.read(reinterpret_cast<char *>(index->clusters_bias.data()), index->clusters_bias.size() * sizeof(float));
@@ -397,7 +399,7 @@ std::unique_ptr<PQIndex> load_pq(std::istream &is, RawVectorData *raw_data) {
     is.read(reinterpret_cast<char *>(index->cluster_start.data()), index->cluster_start.size() * sizeof(int));
     is.read(reinterpret_cast<char *>(index->cluster_values.data()), index->cluster_values.size() * sizeof(int));
     is.read(reinterpret_cast<char *>(index->bias.data()), index->bias.size() * sizeof(float));
-    is.read(reinterpret_cast<char *>(index->clustered_quant.get()), qvec_size * raw_data->length);
+    is.read(reinterpret_cast<char *>(index->clustered_quant.get()), qvec_size * header.num_points);
     return index;
 }
 
@@ -714,7 +716,7 @@ void PQIndex::query_filtered(float *query, int *result, int k, int filter_idx) {
     } else {
         std::sort(results.begin(), results.end(), CompDesc());
     }
-    
+
     for (int i = 0; i < std::min(k, (int) results.size()); i++) {
         result[i] = results[i].i;
     }
