@@ -13,6 +13,7 @@ pq_color = 'C2'
 # --- Configuration for Recall-100@100 ---
 GROUND_TRUTH_FILE_PATH_SIFT1M_100NN = 'G:\\vectors\\sift\\sift_groundtruth.ivecs'
 _sift_groundtruth_data_100nn = None # For lazy loading
+_graph_metadata_cache = {}
 
 def load_sift_groundtruth_ivecs(filepath, num_queries=10000, expected_dims=100):
     """
@@ -61,7 +62,7 @@ def calculate_recall_at_k(predicted_neighbors_filepath, ground_truth_sets, num_q
         predicted_ids = np.fromfile(predicted_neighbors_filepath, dtype=np.uint32, count=num_queries * k)
         if len(predicted_ids) != num_queries * k:
             print(f"Error: Expected {num_queries * k} IDs in {predicted_neighbors_filepath}, found {len(predicted_ids)}")
-            return None
+            num_queries = len(predicted_ids) // k
 
     except FileNotFoundError:
         print(f"Error: Predicted neighbors file not found: {predicted_neighbors_filepath}")
@@ -117,6 +118,119 @@ def get_recall_100_at_100_value_computer(data_point, base_dir='outs'):
     return None
 # --- End of Recall-100@100 specific code ---
 
+def get_max_degree_value_computer(data_point, **kwargs):
+    """
+    Computes the maximum degree based on algorithm type and parameters.
+    HNSW: 2 * M
+    Vamana: R
+    """
+    algo_type = data_point.get('type')
+    if algo_type == 'hnsw':
+        m_val = data_point.get('M')
+        if m_val is not None:
+            return 2 * m_val
+    elif algo_type == 'vamana':
+        r_val = data_point.get('R')
+        if r_val is not None:
+            return r_val
+    # PQ or other types do not have a defined max degree in this context
+    return None
+
+def load_graph_metadata(graph_filepath):
+    """
+    Loads graph metadata from a binary file (V x 4 matrix of uint32_t).
+    Caches the loaded data to avoid redundant reads.
+    Each record: id, level, degree, distance.
+    Returns a NumPy array (V, 4) or None if an error occurs.
+    """
+    global _graph_metadata_cache
+    if graph_filepath in _graph_metadata_cache:
+        # Return cached data, even if it was a failure (None)
+        return _graph_metadata_cache[graph_filepath]
+
+    try:
+        data = np.fromfile(graph_filepath, dtype=np.uint32)
+        if data.size == 0:
+            # print(f"Warning: Graph metadata file is empty: {graph_filepath}") # Less verbose
+            _graph_metadata_cache[graph_filepath] = None
+            return None
+        if data.size % 4 != 0:
+            print(f"Warning: Graph metadata file size {data.size} is not a multiple of 4 fields for {graph_filepath}")
+            _graph_metadata_cache[graph_filepath] = None
+            return None
+
+        graph_matrix = data.reshape(-1, 4)
+        _graph_metadata_cache[graph_filepath] = graph_matrix
+        # print(f"Successfully loaded graph metadata for {graph_filepath}, shape {graph_matrix.shape}")
+        return graph_matrix
+    except FileNotFoundError:
+        # print(f"Warning: Graph metadata file not found: {graph_filepath}") # Less verbose
+        _graph_metadata_cache[graph_filepath] = None
+        return None
+    except Exception as e:
+        print(f"Error loading graph metadata from {graph_filepath}: {e}")
+        _graph_metadata_cache[graph_filepath] = None
+        return None
+
+def get_avg_vertex_distance_computer(data_point, base_dir='outs'):
+    """
+    Computes the average vertex distance from graph metadata.
+    Distance is stored as its one's complement if not found (MSB=1).
+    "Not-found" distances (after undoing complement) are included in the average.
+    """
+    if not data_point.get('k_ann_output_file'):
+        return None
+
+    graph_filename = 'graph_' + data_point['k_ann_output_file']
+    graph_filepath = os.path.join(base_dir, graph_filename)
+
+    graph_matrix = load_graph_metadata(graph_filepath)
+    if graph_matrix is None or graph_matrix.shape[0] == 0:
+        # print(f"Could not load or empty graph data for {graph_filepath} to compute avg distance.")
+        return None
+
+    stored_distances = graph_matrix[:, 3].astype(np.uint32) # 4th column is distance
+
+    # If MSB is 0, distance is as-is.
+    # If MSB is 1, it's a "not found" marker, stored as ~original_marker_value.
+    # We use ~stored_value to get that original_marker_value for the average.
+    processed_distances = np.where(
+        (stored_distances & 0x80000000) == 0,  # Condition: MSB is 0 (found)
+        stored_distances,                       # Value if true
+        ~stored_distances                       # Value if false (apply NOT to complemented "not found" marker)
+    ).astype(np.uint32) # Ensure it remains uint32 after potential bitwise not on mixed types
+
+    return np.mean(processed_distances)
+
+def get_vertex_recall_computer(data_point, base_dir='outs'):
+    """
+    Computes vertex recall: fraction of vertices where distance is found.
+    Distance is considered "found" if its MSB is 0 in the stored graph metadata.
+    """
+    if not data_point.get('k_ann_output_file'):
+        return None
+
+    graph_filename = 'graph_' + data_point['k_ann_output_file']
+    graph_filepath = os.path.join(base_dir, graph_filename)
+
+    graph_matrix = load_graph_metadata(graph_filepath)
+    if graph_matrix is None or graph_matrix.shape[0] == 0:
+        # print(f"Could not load or empty graph data for {graph_filepath} to compute vertex recall.")
+        return None
+
+    stored_distances = graph_matrix[:, 3].astype(np.uint32) # 4th column
+    num_vertices = stored_distances.shape[0]
+
+    if num_vertices == 0:
+        return 0.0 # Or None, depending on desired behavior for empty graphs
+
+    # Count vertices where distance is "found" (MSB is 0)
+    num_found = np.sum((stored_distances & 0x80000000) == 0)
+
+    return num_found / num_vertices
+
+# --- etc ---
+
 def get_latency(content):
     """Extracts latency from file content."""
     lat_match = re.search(r'avg query latency: ([\d\.]+) ms', content)
@@ -129,6 +243,13 @@ def get_recall_1_100(content): # This is the original recall, presumably R@100 w
     rec_match = re.search(r'recall@100: ([\d\.]+)', content)
     if rec_match:
         return float(rec_match.group(1))
+    return None
+
+def get_avg_vertices_explored(content):
+    """Extracts average number of vertices explored from file content."""
+    match = re.search(r"\[STATS\] avg num vertices explored: ([\d\.]+)", content)
+    if match:
+        return float(match.group(1))
     return None
 
 def parse_filename(filename):
@@ -171,15 +292,14 @@ def parse_file_content(filepath):
 
     latency = get_latency(content)
     recall_1_at_100 = get_recall_1_100(content)
+    avg_vertices = get_avg_vertices_explored(content)
 
     k_ann_output_file = None
     k_ann_match = re.search(r"k-ANN output written to: (\S+)", content)
     if k_ann_match:
         k_ann_output_file = k_ann_match.group(1)
 
-    # The function signature expects 4 return values now due to the initial code structure,
-    # The 4th one (actual recall_100_100 value) will be computed later if needed.
-    return latency, recall_1_at_100, k_ann_output_file, None
+    return latency, recall_1_at_100, k_ann_output_file, avg_vertices
 
 
 AXIS_METADATA = {
@@ -195,7 +315,27 @@ AXIS_METADATA = {
         'title': 'Recall-100@100',
         'data_key': 'recall_100_at_100_actual_value',
         'computer_func': get_recall_100_at_100_value_computer # Specific function to compute this
-    }
+    },
+    'degree': {
+        'title': 'Maximum Degree',
+        'data_key': 'max_degree_value',
+        'computer_func': get_max_degree_value_computer
+    },
+    'explored': {
+        'title': 'Avg. Vertices Explored',
+        'data_key': 'avg_vertices_explored_value'
+        # This will be directly populated from parse_file_content output
+    },
+    'avg_vertex_distance': {
+        'title': 'Avg. Vertex Distance',
+        'data_key': 'avg_vertex_distance_value',
+        'computer_func': get_avg_vertex_distance_computer
+    },
+    'vertex_recall': {
+        'title': 'Vertex Recall',
+        'data_key': 'vertex_recall_value',
+        'computer_func': get_vertex_recall_computer
+    },
 }
 
 
@@ -229,7 +369,7 @@ def main():
         if not base_params:
             continue
 
-        latency, recall_1_at_100, k_ann_output_file, _ = parse_file_content(os.path.join(args.outs_dir, f_name))
+        latency, recall_1_at_100, k_ann_output_file, avg_vertices_val = parse_file_content(os.path.join(args.outs_dir, f_name))
 
         current_data_point = {}
         current_data_point.update(base_params)
@@ -240,6 +380,8 @@ def main():
             current_data_point[AXIS_METADATA['latency']['data_key']] = latency
         if recall_1_at_100 is not None:
             current_data_point[AXIS_METADATA['recall_1_100']['data_key']] = recall_1_at_100
+        if avg_vertices_val is not None:
+            current_data_point[AXIS_METADATA['explored']['data_key']] = avg_vertices_val
 
         # Compute values for axes if they have a computer_func
         for axis_arg_name in [args.x, args.y]:
@@ -369,8 +511,8 @@ def main():
         if pq_k8192_valid:
             legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='x', linestyle='None', label='PQ K=8192'))
         if pq_k1024_valid or pq_k8192_valid : # Add line style legends if any PQ data is plotted
-            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='-', label='change w (same M)'))
-            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='--', label='change M (same W)'))
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='-', label='change w'))
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='--', label='change M'))
 
 
     plt.xlabel(AXIS_METADATA[args.x]['title'])
