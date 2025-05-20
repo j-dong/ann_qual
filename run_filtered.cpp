@@ -599,11 +599,9 @@ void NaiveIndex::query_filtered(float *query, int *result, int k, int filter_idx
 
     int num_filtered = (int) results.size();
 
-    // calculate iprods
-    std::vector<float> iprods(num_filtered);
 #pragma omp parallel for
     for (int i = 0; i < num_filtered; i++) {
-        iprods[i] = cblas_sdot(dim, &vectors->at(results[i].i, 0), 1, query, 1) + bias[results[i].i];
+        results[i].v = cblas_sdot(dim, &vectors->at(results[i].i, 0), 1, query, 1) + bias[results[i].i];
     }
     // sort
     if (k < num_filtered) {

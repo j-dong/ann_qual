@@ -5,10 +5,14 @@ import os
 import argparse
 import struct
 import numpy as np
+import matplotlib.axes
+import typing
 
 hnsw_color = 'C0'
 vamana_color = 'C1'
 pq_color = 'C2'
+
+N = 1000000
 
 # --- Configuration for Recall-100@100 ---
 GROUND_TRUTH_FILE_PATH_SIFT1M_100NN = 'G:\\vectors\\sift\\sift_groundtruth.ivecs'
@@ -172,6 +176,25 @@ def load_graph_metadata(graph_filepath):
         _graph_metadata_cache[graph_filepath] = None
         return None
 
+def get_avg_vertex_degree_computer(data_point, base_dir='outs'):
+    """
+    Computes the average vertex degree from graph metadata.
+    """
+    if not data_point.get('k_ann_output_file'):
+        return None
+
+    graph_filename = 'graph_' + data_point['k_ann_output_file']
+    graph_filepath = os.path.join(base_dir, graph_filename)
+
+    graph_matrix = load_graph_metadata(graph_filepath)
+    if graph_matrix is None or graph_matrix.shape[0] == 0:
+        # print(f"Could not load or empty graph data for {graph_filepath} to compute avg distance.")
+        return None
+
+    degrees = graph_matrix[:N, 2].astype(np.uint32)
+
+    return np.mean(degrees)
+
 def get_avg_vertex_distance_computer(data_point, base_dir='outs'):
     """
     Computes the average vertex distance from graph metadata.
@@ -189,7 +212,7 @@ def get_avg_vertex_distance_computer(data_point, base_dir='outs'):
         # print(f"Could not load or empty graph data for {graph_filepath} to compute avg distance.")
         return None
 
-    stored_distances = graph_matrix[:, 3].astype(np.uint32) # 4th column is distance
+    stored_distances = graph_matrix[:N, 3].astype(np.uint32) # 4th column is distance
 
     # If MSB is 0, distance is as-is.
     # If MSB is 1, it's a "not found" marker, stored as ~original_marker_value.
@@ -218,7 +241,7 @@ def get_vertex_recall_computer(data_point, base_dir='outs'):
         # print(f"Could not load or empty graph data for {graph_filepath} to compute vertex recall.")
         return None
 
-    stored_distances = graph_matrix[:, 3].astype(np.uint32) # 4th column
+    stored_distances = graph_matrix[:N, 3].astype(np.uint32) # 4th column
     num_vertices = stored_distances.shape[0]
 
     if num_vertices == 0:
@@ -331,12 +354,54 @@ AXIS_METADATA = {
         'data_key': 'avg_vertex_distance_value',
         'computer_func': get_avg_vertex_distance_computer
     },
+    'avg_degree': {
+        'title': 'Avg. Degree',
+        'data_key': 'avg_vertex_degree',
+        'computer_func': get_avg_vertex_degree_computer
+    },
     'vertex_recall': {
         'title': 'Vertex Recall',
         'data_key': 'vertex_recall_value',
         'computer_func': get_vertex_recall_computer
     },
 }
+
+def connect_pq_quads(points_dict, line_color, ax): # Added ax argument
+    m_values = sorted(list(set(m for m,w in points_dict.keys())))
+    w_values = sorted(list(set(w for m,w in points_dict.keys())))
+
+    if len(m_values) >= 2 and len(w_values) >= 2:
+        # ... (rest of the logic, but use ax.plot instead of plt.plot)
+        # Example change:
+        # plt.plot([p_mw1[0], p_mw2[0]], [p_mw1[1], p_mw2[1]], color=line_color, linestyle='-')
+        # becomes:
+        # ax.plot([p_mw1[0], p_mw2[0]], [p_mw1[1], p_mw2[1]], color=line_color, linestyle='-')
+        # This change needs to be applied to all plt.plot calls within connect_pq_quads
+        # For brevity, I'm not rewriting the whole function here but indicating the change pattern.
+        # Search and replace plt.plot with ax.plot inside connect_pq_quads.
+
+        # W-edges (same M, different W) - solid
+        for m_val in m_values:
+            current_m_points_w_sorted = sorted([(w, points_dict[(m_val,w)]) for w in w_values if (m_val,w) in points_dict], key=lambda item: item[0])
+            for k_idx in range(len(current_m_points_w_sorted) - 1):
+                p_mw1 = current_m_points_w_sorted[k_idx][1]
+                p_mw2 = current_m_points_w_sorted[k_idx+1][1]
+                ax.plot([p_mw1[0], p_mw2[0]], [p_mw1[1], p_mw2[1]], color=line_color, linestyle='-')
+
+        # M-edges (same W, different M) - dashed
+        # Iterate through M value pairs
+        for i in range(len(m_values)):
+            for j in range(i + 1, len(m_values)):
+                m1 = m_values[i]
+                m2 = m_values[j]
+                for w_val in w_values:
+                    p_m1w = points_dict.get((m1, w_val))
+                    p_m2w = points_dict.get((m2, w_val))
+                    if p_m1w and p_m2w:
+                        ax.plot([p_m1w[0], p_m2w[0]], [p_m1w[1], p_m2w[1]], color=line_color, linestyle='--')
+
+    # else:
+        # print(f"Not enough M ({len(m_values)}) or W ({len(w_values)}) values to form quadrilaterals for {points_dict.keys()} on axis {ax}")
 
 
 def main():
@@ -346,13 +411,24 @@ def main():
                         help=f'Function name for X axis. Options: {", ".join(AXIS_METADATA.keys())}')
     parser.add_argument('-y', default='recall_1_100', choices=list(AXIS_METADATA.keys()),
                         help=f'Function name for Y axis. Options: {", ".join(AXIS_METADATA.keys())}')
+    parser.add_argument('-y2', default=None, choices=list(AXIS_METADATA.keys()) + [None], # Allow None
+                        help='Optional: Function name for the second Y-axis. Clears PQ quads for Y1 if used.')
     parser.add_argument('--hide-pq', action='store_true', help='Hide PQ data from the plot.')
     parser.add_argument('--outs-dir', default='outs', help='Directory containing the output log files.')
 
     args = parser.parse_args()
 
+    y1_axis_color = 'dimgray' # Color for Y1 axis label and ticks
+    y2_axis_color = 'darkcyan' # Color for Y2 axis label and ticks
+
     if args.x not in AXIS_METADATA or args.y not in AXIS_METADATA:
         print("Error: Invalid function name for -x or -y argument.")
+        return
+    if args.y2 and args.y2 not in AXIS_METADATA:
+        print("Error: Invalid function name for -y2 argument.")
+        return
+    if args.y == args.y2 and args.y2 is not None:
+        print("Error: -y and -y2 cannot be the same metric.")
         return
 
     if not os.path.isdir(args.outs_dir):
@@ -364,6 +440,11 @@ def main():
     ]
 
     data = []
+
+    active_metric_names = {args.x, args.y}
+    if args.y2:
+        active_metric_names.add(args.y2)
+
     for f_name in filenames:
         base_params = parse_filename(f_name)
         if not base_params:
@@ -384,23 +465,25 @@ def main():
             current_data_point[AXIS_METADATA['explored']['data_key']] = avg_vertices_val
 
         # Compute values for axes if they have a computer_func
-        for axis_arg_name in [args.x, args.y]:
-            axis_meta = AXIS_METADATA[axis_arg_name]
-            if 'computer_func' in axis_meta and axis_meta['data_key'] not in current_data_point:
+        for metric_name in active_metric_names:
+            if metric_name is None: continue # Should not happen with set logic but good check
+            axis_meta = AXIS_METADATA[metric_name]
+            # Ensure data_key exists before checking if it's already populated
+            if 'computer_func' in axis_meta and axis_meta.get('data_key') not in current_data_point :
                 computed_value = axis_meta['computer_func'](current_data_point, base_dir=args.outs_dir)
                 if computed_value is not None:
                     current_data_point[axis_meta['data_key']] = computed_value
-                # else:
-                    # print(f"Warning: Could not compute {axis_arg_name} for {f_name}")
 
 
         required_x_key = AXIS_METADATA[args.x]['data_key']
-        required_y_key = AXIS_METADATA[args.y]['data_key']
+        required_y1_key = AXIS_METADATA[args.y]['data_key']
 
-        if required_x_key in current_data_point and required_y_key in current_data_point:
+        if required_x_key in current_data_point and required_y1_key in current_data_point:
+            # If y2 is specified, it's desirable but not strictly required for the point to be added to master list.
+            # Plotting functions will handle missing y2 data for specific series.
             data.append(current_data_point)
         # else:
-        #     print(f"Warning: Missing required data for plot axes ({args.x} or {args.y}) for file {f_name}. Skipping.")
+            # print(f"Warning: Missing X or Y1 data for {f_name}. Point not added.")
 
 
     # Separate data by type
@@ -408,124 +491,201 @@ def main():
     vamana_data = sorted([d for d in data if d.get('type') == 'vamana'], key=lambda x: x.get('R', float('inf')))
     pq_data = [d for d in data if d.get('type') == 'pq']
 
-    plt.figure(figsize=(12, 8))
+    fig, ax1 = plt.subplots(figsize=(12, 8))
+    ax2 = None
+
+    if args.y2:
+        ax2: typing.Optional[matplotlib.axes.Axes] = ax1.twinx() # type:ignore
 
     x_data_key = AXIS_METADATA[args.x]['data_key']
-    y_data_key = AXIS_METADATA[args.y]['data_key']
-
-    # Plot HNSW
-    if hnsw_data:
-        x_hnsw = [d[x_data_key] for d in hnsw_data if x_data_key in d]
-        y_hnsw = [d[y_data_key] for d in hnsw_data if y_data_key in d]
-        if x_hnsw and y_hnsw: # Ensure there's data to plot
-            valid_hnsw_data = [d for d in hnsw_data if x_data_key in d and y_data_key in d]
-            plt.plot([d[x_data_key] for d in valid_hnsw_data],
-                     [d[y_data_key] for d in valid_hnsw_data],
-                     marker='o', linestyle='-', color=hnsw_color, label='HNSW')
-            for d in valid_hnsw_data:
-                plt.text(d[x_data_key], d[y_data_key], f" M{d.get('M','')}", fontsize=8, va='bottom', ha='left')
-
-    # Plot Vamana
-    if vamana_data:
-        x_vamana = [d[x_data_key] for d in vamana_data if x_data_key in d]
-        y_vamana = [d[y_data_key] for d in vamana_data if y_data_key in d]
-        if x_vamana and y_vamana: # Ensure there's data to plot
-            valid_vamana_data = [d for d in vamana_data if x_data_key in d and y_data_key in d]
-            plt.plot([d[x_data_key] for d in valid_vamana_data],
-                     [d[y_data_key] for d in valid_vamana_data],
-                     marker='s', linestyle='-', color=vamana_color, label='Vamana')
-            for d in valid_vamana_data:
-                plt.text(d[x_data_key], d[y_data_key], f" R{d.get('R','')}", fontsize=8, va='bottom', ha='left')
-
+    y1_data_key = AXIS_METADATA[args.y]['data_key']
+    y2_data_key = AXIS_METADATA[args.y2]['data_key'] if args.y2 else None
 
     legend_elements = []
-    if any(d.get('type') == 'hnsw' and x_data_key in d and y_data_key in d for d in data):
-         legend_elements.append(mlines.Line2D([0], [0], color=hnsw_color, marker='o', linestyle='-', label='HNSW'))
-    if any(d.get('type') == 'vamana' and x_data_key in d and y_data_key in d for d in data):
-        legend_elements.append(mlines.Line2D([0], [0], color=vamana_color, marker='s', linestyle='-', label='Vamana'))
+
+    # --- HNSW Plotting (Modified) ---
+    hnsw_data_points = sorted([d for d in data if d.get('type') == 'hnsw'], key=lambda x: x.get('M', float('inf')))
+    if hnsw_data_points:
+        valid_hnsw_y1 = [d for d in hnsw_data_points if x_data_key in d and y1_data_key in d]
+        if valid_hnsw_y1:
+            x_coords = [d[x_data_key] for d in valid_hnsw_y1]
+            y1_coords = [d[y1_data_key] for d in valid_hnsw_y1]
+            label = 'HNSW'
+            if args.y2: label = f'HNSW ({AXIS_METADATA[args.y]["title"]})'
+            line1, = ax1.plot(x_coords, y1_coords, marker='o', linestyle='-', color=hnsw_color, label=label)
+            if not args.y2: # Add legend element only if not adding compound Y2 legend later
+                 legend_elements.append(line1)
+            for d in valid_hnsw_y1:
+                ax1.text(d[x_data_key], d[y1_data_key], f" M{d.get('M','')}", fontsize=8, va='bottom', ha='left')
+
+            if ax2 and y2_data_key:
+                valid_hnsw_y2 = [d for d in hnsw_data_points if x_data_key in d and y2_data_key in d]
+                if valid_hnsw_y2:
+                    x_coords_y2 = [d[x_data_key] for d in valid_hnsw_y2]
+                    y2_coords = [d[y2_data_key] for d in valid_hnsw_y2]
+                    line2, = ax2.plot(x_coords_y2, y2_coords, marker='X', linestyle='--', color=hnsw_color, label=f'HNSW ({AXIS_METADATA[args.y2]["title"]})')
+                    # If Y2 is present, a combined legend entry might be better.
+                    # For now, let legend handle both distinct entries if line1 was also added.
+                    # Or, create a combined legend element if line1 was for the same base series.
+                    # For simplicity, we add both if y2 is active:
+                    if valid_hnsw_y1 : legend_elements.append(line1) # Re-add Y1 line for clarity with Y2
+                    legend_elements.append(line2)
 
 
+    # --- Vamana Plotting (Modified similarly) ---
+    vamana_data_points = sorted([d for d in data if d.get('type') == 'vamana'], key=lambda x: x.get('R', float('inf')))
+    if vamana_data_points:
+        valid_vamana_y1 = [d for d in vamana_data_points if x_data_key in d and y1_data_key in d]
+        if valid_vamana_y1:
+            x_coords = [d[x_data_key] for d in valid_vamana_y1]
+            y1_coords = [d[y1_data_key] for d in valid_vamana_y1]
+            line1_v, = ax1.plot(x_coords, y1_coords, marker='s', linestyle='-', color=vamana_color, label=f'Vamana ({AXIS_METADATA[args.y]["title"]})')
+            if not args.y2: legend_elements.append(line1_v)
+            for d in valid_vamana_y1:
+                ax1.text(d[x_data_key], d[y1_data_key], f" R{d.get('R','')}", fontsize=8, va='bottom', ha='left')
+
+            if ax2 and y2_data_key:
+                valid_vamana_y2 = [d for d in vamana_data_points if x_data_key in d and y2_data_key in d]
+                if valid_vamana_y2:
+                    x_coords_y2 = [d[x_data_key] for d in valid_vamana_y2]
+                    y2_coords = [d[y2_data_key] for d in valid_vamana_y2]
+                    line2_v, = ax2.plot(x_coords_y2, y2_coords, marker='P', linestyle='--', color=vamana_color, label=f'Vamana ({AXIS_METADATA[args.y2]["title"]})')
+                    if valid_vamana_y1: legend_elements.append(line1_v)
+                    legend_elements.append(line2_v)
+
+
+    # --- PQ Plotting (Modified - Y2 plots points only, Y1 quads conditional) ---
     if not args.hide_pq:
-        pq_k1024_valid = [d for d in pq_data if d.get('K') == 1024 and x_data_key in d and y_data_key in d]
-        pq_k8192_valid = [d for d in pq_data if d.get('K') == 8192 and x_data_key in d and y_data_key in d]
+        pq_data_points = [d for d in data if d.get('type') == 'pq']
 
-        pq_k1024 = sorted(pq_k1024_valid, key=lambda x: (x.get('M', 0), x.get('W', 0)))
-        pq_k8192 = sorted(pq_k8192_valid, key=lambda x: (x.get('M', 0), x.get('W', 0)))
-
-
-        points_k1024 = {}
-        for d in pq_k1024:
-            points_k1024[(d['M'], d['W'])] = (d[x_data_key], d[y_data_key])
-            plt.plot(d[x_data_key], d[y_data_key], marker='^', color=pq_color, markersize=8, linestyle='None')
-            plt.text(d[x_data_key], d[y_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='top')
-
-        points_k8192 = {}
-        for d in pq_k8192:
-            points_k8192[(d['M'], d['W'])] = (d[x_data_key], d[y_data_key])
-            plt.plot(d[x_data_key], d[y_data_key], marker='x', color=pq_color, markersize=8, linestyle='None')
-            plt.text(d[x_data_key], d[y_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='bottom')
-
-        def connect_pq_quads(points_dict, line_color):
-            m_values = sorted(list(set(m for m,w in points_dict.keys())))
-            w_values = sorted(list(set(w for m,w in points_dict.keys())))
-
-            if len(m_values) >= 2 and len(w_values) >= 2:
-                for i in range(len(m_values) -1): # Iterate through M-pairs
-                    m1 = m_values[i]
-                    # This connection logic assumes M values are adjacent in the sorted list
-                    # and form "quads" based on their sorted order.
-                    # For arbitrary M pairings, a different grouping logic would be needed.
-                    # The original script seemed to imply specific M-pairs like (8,32).
-                    # This version will connect any two adjacent M's if they share W's.
-
-                    # Try to connect M-pairs that share W values
-                    for j in range(i + 1, len(m_values)):
-                        m2 = m_values[j] # Consider all other M values as potential pairs
-
-                        # M-edges (same W, different M) - dashed
-                        for w_val in w_values:
-                            p_m1w = points_dict.get((m1, w_val))
-                            p_m2w = points_dict.get((m2, w_val))
-                            if p_m1w and p_m2w:
-                                plt.plot([p_m1w[0], p_m2w[0]], [p_m1w[1], p_m2w[1]], color=line_color, linestyle='--')
-
-                # W-edges (same M, different W) - solid
-                for m_val in m_values:
-                     # Find points with this M value and different W values
-                    current_m_points_w_sorted = sorted([(w, points_dict[(m_val,w)]) for w in w_values if (m_val,w) in points_dict], key=lambda item: item[0])
-
-                    # Connect adjacent W values for the same M
-                    for k_idx in range(len(current_m_points_w_sorted) - 1):
-                        p_mw1 = current_m_points_w_sorted[k_idx][1]
-                        p_mw2 = current_m_points_w_sorted[k_idx+1][1]
-                        plt.plot([p_mw1[0], p_mw2[0]], [p_mw1[1], p_mw2[1]], color=line_color, linestyle='-')
+        # PQ K=1024
+        pq_k1024_y1 = sorted([d for d in pq_data_points if d.get('K') == 1024 and x_data_key in d and y1_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+        points_k1024_y1 = {}
+        if pq_k1024_y1:
+            for d in pq_k1024_y1:
+                points_k1024_y1[(d['M'], d['W'])] = (d[x_data_key], d[y1_data_key])
+                ax1.plot(d[x_data_key], d[y1_data_key], marker='^', color=pq_color, markersize=8, linestyle='None')
+                # Text only for Y1 to avoid overlap
+                ax1.text(d[x_data_key], d[y1_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='top')
+            if not ax2 : # Only connect quads if no Y2 axis, or define behavior
+                connect_pq_quads(points_k1024_y1, pq_color, ax1) # Pass ax1
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='^', linestyle='None', label=f'PQ K1024 ({AXIS_METADATA[args.y]["title"]})'))
 
 
-        if points_k1024:
-            connect_pq_quads(points_k1024, pq_color)
-        if points_k8192:
-            connect_pq_quads(points_k8192, pq_color)
+        if ax2 and y2_data_key:
+            pq_k1024_y2 = sorted([d for d in pq_data_points if d.get('K') == 1024 and x_data_key in d and y2_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+            if pq_k1024_y2:
+                for d in pq_k1024_y2:
+                    ax2.plot(d[x_data_key], d[y2_data_key], marker='v', color=pq_color, markersize=7, linestyle='None') 
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='v', linestyle='None', label=f'PQ K1024 ({AXIS_METADATA[args.y2]["title"]})'))
 
-        if pq_k1024_valid:
-             legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='^', linestyle='None', label='PQ K=1024'))
-        if pq_k8192_valid:
-            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='x', linestyle='None', label='PQ K=8192'))
-        if pq_k1024_valid or pq_k8192_valid : # Add line style legends if any PQ data is plotted
-            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='-', label='change w'))
-            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='--', label='change M'))
+        # PQ K=8192 (similar modifications)
+        pq_k8192_y1 = sorted([d for d in pq_data_points if d.get('K') == 8192 and x_data_key in d and y1_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+        points_k8192_y1 = {}
+        if pq_k8192_y1:
+            for d in pq_k8192_y1:
+                points_k8192_y1[(d['M'], d['W'])] = (d[x_data_key], d[y1_data_key])
+                ax1.plot(d[x_data_key], d[y1_data_key], marker='x', color=pq_color, markersize=8, linestyle='None')
+                ax1.text(d[x_data_key], d[y1_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='bottom')
+            if not ax2:
+                connect_pq_quads(points_k8192_y1, pq_color, ax1) # Pass ax1
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='x', linestyle='None', label=f'PQ K8192 ({AXIS_METADATA[args.y]["title"]})'))
+
+        if ax2 and y2_data_key:
+            pq_k8192_y2 = sorted([d for d in pq_data_points if d.get('K') == 8192 and x_data_key in d and y2_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+            if pq_k8192_y2:
+                for d in pq_k8192_y2:
+                    ax2.plot(d[x_data_key], d[y2_data_key], marker='+', color=pq_color, markersize=7, linestyle='None')
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='+', linestyle='None', label=f'PQ K8192 ({AXIS_METADATA[args.y2]["title"]})'))
+
+        # Add PQ line style legends only if PQ data was plotted for Y1 and quads were relevant
+        if (pq_k1024_y1 or pq_k8192_y1) and not ax2 : # Or if Y1 quads are always drawn
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='-', label='PQ change w (Y1)'))
+            legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='--', label='PQ change M (Y1)'))
+
+        if not args.hide_pq:
+            pq_data_points = [d for d in data if d.get('type') == 'pq']
+
+            # PQ K=1024
+            pq_k1024_y1 = sorted([d for d in pq_data_points if d.get('K') == 1024 and x_data_key in d and y1_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+            points_k1024_y1 = {}
+            if pq_k1024_y1:
+                for d in pq_k1024_y1:
+                    points_k1024_y1[(d['M'], d['W'])] = (d[x_data_key], d[y1_data_key])
+                    ax1.plot(d[x_data_key], d[y1_data_key], marker='^', color=pq_color, markersize=8, linestyle='None')
+                    # Text only for Y1 to avoid overlap
+                    ax1.text(d[x_data_key], d[y1_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='top')
+                if not ax2 : # Only connect quads if no Y2 axis, or define behavior
+                    connect_pq_quads(points_k1024_y1, pq_color, ax1) # Pass ax1
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='^', linestyle='None', label=f'PQ K1024 ({AXIS_METADATA[args.y]["title"]})'))
 
 
-    plt.xlabel(AXIS_METADATA[args.x]['title'])
-    plt.ylabel(AXIS_METADATA[args.y]['title'])
-    plt.title(f"{AXIS_METADATA[args.x]['title']} vs. {AXIS_METADATA[args.y]['title']}")
+            if ax2 and y2_data_key:
+                pq_k1024_y2 = sorted([d for d in pq_data_points if d.get('K') == 1024 and x_data_key in d and y2_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+                if pq_k1024_y2:
+                    for d in pq_k1024_y2:
+                        ax2.plot(d[x_data_key], d[y2_data_key], marker='v', color=pq_color, markersize=7, linestyle='None') 
+                    legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='v', linestyle='None', label=f'PQ K1024 ({AXIS_METADATA[args.y2]["title"]})'))
 
-    if legend_elements: # Only show legend if there are items
-        plt.legend(handles=legend_elements)
-    plt.grid(True)
-    plt.tight_layout()
+            # PQ K=8192 (similar modifications)
+            pq_k8192_y1 = sorted([d for d in pq_data_points if d.get('K') == 8192 and x_data_key in d and y1_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+            points_k8192_y1 = {}
+            if pq_k8192_y1:
+                for d in pq_k8192_y1:
+                    points_k8192_y1[(d['M'], d['W'])] = (d[x_data_key], d[y1_data_key])
+                    ax1.plot(d[x_data_key], d[y1_data_key], marker='x', color=pq_color, markersize=8, linestyle='None')
+                    ax1.text(d[x_data_key], d[y1_data_key], f" K{d['K']}\nW{d['W']}\nM{d['M']}", fontsize=7, ha='center', va='bottom')
+                if not ax2:
+                    connect_pq_quads(points_k8192_y1, pq_color, ax1) # Pass ax1
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='x', linestyle='None', label=f'PQ K8192 ({AXIS_METADATA[args.y]["title"]})'))
+
+            if ax2 and y2_data_key:
+                pq_k8192_y2 = sorted([d for d in pq_data_points if d.get('K') == 8192 and x_data_key in d and y2_data_key in d], key=lambda x: (x.get('M', 0), x.get('W', 0)))
+                if pq_k8192_y2:
+                    for d in pq_k8192_y2:
+                        ax2.plot(d[x_data_key], d[y2_data_key], marker='+', color=pq_color, markersize=7, linestyle='None')
+                    legend_elements.append(mlines.Line2D([0], [0], color=pq_color, marker='+', linestyle='None', label=f'PQ K8192 ({AXIS_METADATA[args.y2]["title"]})'))
+
+            # Add PQ line style legends only if PQ data was plotted for Y1 and quads were relevant
+            if (pq_k1024_y1 or pq_k8192_y1) and not ax2 : # Or if Y1 quads are always drawn
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='-', label='PQ change w (Y1)'))
+                legend_elements.append(mlines.Line2D([0], [0], color=pq_color, linestyle='--', label='PQ change M (Y1)'))
+
+    if args.x == 'degree' and args.y == 'avg_degree':
+        xs = [8, 16, 32, 64, 128, 256]
+        ax1.plot(xs, xs, marker='None', color='lightgray')
+
+    ax1.set_xlabel(AXIS_METADATA[args.x]['title'])
+    ax1.set_ylabel(AXIS_METADATA[args.y]['title'], color=y1_axis_color)
+    ax1.tick_params(axis='y', labelcolor=y1_axis_color)
+
+    if ax2:
+        ax2.set_ylabel(AXIS_METADATA[args.y2]['title'], color=y2_axis_color)
+        ax2.tick_params(axis='y', labelcolor=y2_axis_color)
+        fig.tight_layout() # Adjust layout to make room for the second y-axis
+    else:
+        plt.tight_layout()
+
+
+    plot_title = f"{AXIS_METADATA[args.x]['title']} vs. {AXIS_METADATA[args.y]['title']}"
+    if args.y2:
+        plot_title += f" & {AXIS_METADATA[args.y2]['title']}"
+    plt.title(plot_title)
+
+    if legend_elements:
+        # Position legend to avoid overlap, may need adjustment
+        ax1.legend(handles=legend_elements, loc='best')
+        # For very complex legends, fig.legend() or manual placement might be better.
+
+    ax1.grid(True, linestyle=':', alpha=0.7) # Grid for primary axis
+
+    fig.tight_layout()
 
     if args.save:
-        plot_filename = f"plot_{args.x}_{args.y}.png"
+        plot_filename = f"plot_{args.x}_{args.y}"
+        if args.y2:
+            plot_filename += f"_vs_{args.y2}"
+        plot_filename += ".png"
         plt.savefig(plot_filename)
         print(f"Plot saved as {plot_filename}")
     else:

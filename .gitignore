@@ -18,7 +18,7 @@
 /filtered_out_*
 /filtered_naive_*
 .vscode
-/stdout_filtered.txt
+/stdout_filtered*.txt
 /stats_filtered_out_*
 /stats_naive_*
 *.png
